@@ -50,7 +50,7 @@ public class TextChangedBehaviour : MonoBehaviour
                 _lastText = _textComponent.text;
 
                 if (_contract.AllowLeftTrimText)
-                    _textComponent.text = _textComponent.text.TrimStart(); // Trim leading spaces
+                    _textComponent.text = _textComponent.text.TrimStart(' ', '\t', '\n', '\r'); // Trim leading spaces
             }
 
             yield return null; // Check every frame

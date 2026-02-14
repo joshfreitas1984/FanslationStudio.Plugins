@@ -149,8 +149,36 @@ public class TextResizerService
     public static TextMeshProUGUI[] FindAllTextElements()
     {
         // Find all TextMeshProUGUI components in the scene
-        return UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();
-    }
+        var elems = UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();
+
+    //    if (elems == null || elems.Length == 0)
+    //    {
+    //        _logger.LogWarning("No TextMeshProUGUI elements found in scene. Logging scene objects for debugging:");
+            
+    //        var allObjects = UnityEngine.Object.FindObjectsOfType<Component>();
+    //        var objectTypeGroups = new Dictionary<string, List<Component>>();
+            
+    //        foreach (var obj in allObjects)
+    //        {
+    //            var typeName = obj.GetType().FullName;
+    //            if (!objectTypeGroups.ContainsKey(typeName))
+    //                objectTypeGroups[typeName] = new List<Component>();
+                
+    //            objectTypeGroups[typeName].Add(obj);
+    //        }
+            
+    //        _logger.LogMessage($"Found {objectTypeGroups.Count} different component types in scene:");
+            
+    //        foreach (var kvp in objectTypeGroups)
+    //        {
+    //            var sample = kvp.Value[0];
+    //            var path = ObjectHelper.GetGameObjectPath(sample.gameObject);
+    //            _logger.LogMessage($"  {kvp.Key} (Count: {kvp.Value.Count}) - Sample: {path}");
+    //        }
+    //    }
+
+    //    return elems;
+    //}
 
     public void AddTextElementsToResizers(TextMeshProUGUI[] textElements, bool addUnderCursor = false, bool copyUnderCursor = false)
     {
@@ -369,7 +397,7 @@ public class TextResizerService
             if (resizer.AllowLeftTrimText)
             {
                 //Trim it first so when it initialises it at least trims
-                var trimmed = textComponent.text.TrimStart();
+                var trimmed = textComponent.text.TrimStart(' ', '\t', '\n', '\r');
                 if (textComponent.text != trimmed)
                     textComponent.text = trimmed;
             }
