@@ -63,7 +63,7 @@
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="Build">
-    <Exec Command="pwsh -ExecutionPolicy Bypass -File &quot;$(ProjectDir)/../postBuildScript.ps1&quot; -TargetDir &quot;$(TargetDir)&quot; -$TargetVer 5" />
+    <Exec Command="pwsh -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\postBuildScript.ps1&quot; -TargetVer 5 -TargetDir &quot;$(TargetDir)&quot;" />
   </Target>
 </Project>
 

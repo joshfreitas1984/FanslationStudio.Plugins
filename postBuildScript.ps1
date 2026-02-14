@@ -36,7 +36,7 @@ foreach ($game in $config.games) {
         continue
     }
 
-    if ($game.Version -ne $TargetVersion) {
+    if ($game.Version -ne $TargetVer) {
         Write-Host "Skipping Version: $($game.name)"
         continue
     }
