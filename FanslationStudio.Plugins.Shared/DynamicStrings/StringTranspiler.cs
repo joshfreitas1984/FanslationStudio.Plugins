@@ -31,7 +31,7 @@ public class StringTranspiler
     // This method will be used to handle string comparisons in switch statements
     public static bool NewEqualityOperator(string leftComparison, string rightComparison)
     {
-        StringPatcherPlugin.Logger.LogFatal($"Testing Equality: [[ {leftComparison} ]] == [[ {rightComparison} ]]");
+        StringPatcherService.Logger.LogFatal($"Testing Equality: [[ {leftComparison} ]] == [[ {rightComparison} ]]");
 
         // Direct match
         return string.Equals(leftComparison, rightComparison);

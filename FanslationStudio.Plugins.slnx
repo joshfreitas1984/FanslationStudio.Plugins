@@ -1,6 +1,10 @@
 <Solution>
   <Folder Name="/Solution Items/">
+    <File Path="config.yaml" />
+    <File Path="postBuildScript.ps1" />
     <File Path="readme.md" />
   </Folder>
-  <Project Path="FanslationStudio.Plugins/FanslationStudio.Plugins.csproj" />
+  <Project Path="FanslationStudio.Plugins.BepInEx5/FanslationStudio.Plugins.BepInEx5.csproj" />
+  <Project Path="FanslationStudio.Plugins.BepInEx6/FanslationStudio.Plugins.BepInEx6.csproj" />
+  <Project Path="FanslationStudio.Plugins.Shared/FanslationStudio.Plugins.Shared.csproj" />
 </Solution>

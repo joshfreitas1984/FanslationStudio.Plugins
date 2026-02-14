@@ -5,15 +5,18 @@ games:
     pluginPath: '\BepInEx\plugins'
     releasePath: '\ReleaseFolder\Files'
     export: true
+    version: 6
   - name: "Wanxiang"
     gamePath: 'C:\Program Files (x86)\Steam\steamapps\common\wanxiang\wanxiang' 
     managedPath: '\WXQXZ_Data\Managed'
     pluginPath: '\BepInEx\plugins'
     releasePath: '\ReleaseFolder\Files'
-    export: true
+    export: false
+    version: 5
   - name: "NextStopJianghu2"
     gamePath: 'G:\SteamLibrary\steamapps\common\下一站江湖Ⅱ\下一站江湖Ⅱ'
     managedPath: '\下一站江湖Ⅱ_Data\Managed'
     pluginPath: '\BepInEx\plugins'
     releasePath: '\ReleaseFolder\Files'
     export: false
+    version: 5

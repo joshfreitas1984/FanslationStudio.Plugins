@@ -1,6 +1,4 @@
-﻿using BepInEx;
-using BepInEx.Logging;
-using FanslationStudio.Plugins.Support;
+﻿using FanslationStudio.Plugins.Support;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using System;
@@ -14,23 +12,27 @@ namespace FanslationStudio.Plugins.DynamicStrings;
 /// <summary>
 /// Used to replace hardcoded strings in IL
 /// </summary>
-[BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringDumperPlugin", "DynamicStringDumperPlugin", MyPluginInfo.PLUGIN_VERSION)]
-public class StringDumperPlugin : BaseUnityPlugin
+public class StringDumperService
 {
-    internal static new ManualLogSource Logger;
+    public static IPluginLogger Logger;
     public static bool Enabled = false;
     public static string RegexPattern;
+    public static string DumpFilePath;
+    public static string ManagedPath;
 
-    private void Awake()
+    public StringDumperService(IPluginLogger logger, string dumpFilePath, string regexPattern, bool enabled, string managedPath)
     {
-        Logger = base.Logger;
+        Logger = logger;
+        DumpFilePath = dumpFilePath;
+        RegexPattern = regexPattern;
+        Enabled = enabled;
+        ManagedPath = managedPath;
+    }
 
-        RegexPattern = Config.Bind("General", "ForeignLanguagePattern", DynamicStringSupport.ChineseCharPattern, "Regex pattern for foreign language to scan for").Value;
-        Enabled = Config.Bind("General", "StringDumperEnabled", false, "Enable dynamic string dumping on startup").Value;
-        var dumpFiles = Config.Bind("General", "StringDumperDumpFilePath", ".", "File to dump the dynamic strings to").Value;
-
+    public void Awake()
+    {
         if (Enabled)
-            DumpFiles(dumpFiles);
+            DumpFiles(DumpFilePath);
     }
 
     public void DumpFiles(string outputPath)
@@ -41,7 +43,7 @@ public class StringDumperPlugin : BaseUnityPlugin
         {
             //!!! Manually copy YamlDotNet.dll to the ManagedDlls folder
             var serializer = Yaml.CreateSerializer();
-            string gamePath = Paths.ManagedPath;
+            string gamePath = ManagedPath;
             string assemblyPath = Path.Combine(gamePath, "Assembly-CSharp.dll");
 
             var contracts = new List<DynamicStringContract>();

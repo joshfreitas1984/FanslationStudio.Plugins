@@ -1,8 +1,4 @@
-﻿using BepInEx;
-using BepInEx.Configuration;
-using BepInEx.Logging;
-using FanslationStudio.Plugins.Support;
-using FanslationStudio.Plugins.TextResizer;
+﻿using FanslationStudio.Plugins.Support;
 using HarmonyLib;
 using System;
 using System.Collections.Generic;
@@ -14,69 +10,55 @@ using UnityEngine.UI;
 
 namespace FanslationStudio.Plugins.Sprites;
 
-[BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.SpriteReplacer", "SpriteReplacer", MyPluginInfo.PLUGIN_VERSION)]
-public class SpriteReplacerPlugin : BaseUnityPlugin
+public class SpriteReplacerService
 {
-    internal static new ManualLogSource Logger;
-    public static bool Enabled = false;
+    internal static IPluginLogger _logger;
+    public bool _enabled = false;
+
     public static bool ContractsLoaded = false;
     public static Dictionary<string, SpriteReplacerContract> Contracts = [];
     public static Dictionary<string, SpriteReplacerContract> CachedMatchesContracts = [];
     private static string _folder;
 
-    private ConfigEntry<bool> _devMode;
-    private KeyCode _addAtCursorHotKey = KeyCode.F1;
-    private KeyCode _addAllHotKey = KeyCode.F2;
-    private KeyCode _reloadHotkey = KeyCode.F3;
-
-    private void Awake()
+    public SpriteReplacerService(IPluginLogger logger, bool enabled, string bepinexRootPath)
     {
-        Logger = base.Logger;
+        _logger = logger;
+        _enabled = enabled;
+        _folder = Path.Combine(bepinexRootPath, "sprites2");
+    }
 
-        if (!Enabled)
+    public void Awake()
+    {
+        if (!_enabled)
             return;
 
-        _devMode = Config.Bind("General",
-            "DevMode",
-            false,
-            "Use F1 to Dump under cursor, F2 to dump all, F3 to reload sprites");
+        Harmony.CreateAndPatchAll(typeof(SpriteReplacerService));
+        _logger.LogWarning($"SpriteReplacerV2 Plugin should be patched!");
 
-        Harmony.CreateAndPatchAll(typeof(SpriteReplacerPlugin));
-        Logger.LogWarning($"SpriteReplacerV2 Plugin should be patched!");
-
-        _folder = Path.Combine(Paths.BepInExRootPath, "sprites2");
         if (!Directory.Exists(_folder))
             Directory.CreateDirectory(_folder);
 
         LoadContracts();
-
-        Harmony.CreateAndPatchAll(typeof(TextResizerPlugin));
-        Logger.LogWarning($"SpriteReplacerV2 Plugin Loaded!");
+        _logger.LogWarning($"SpriteReplacer Plugin Loaded!");
     }
 
-    internal void Update()
+    public void Reload()
     {
-        if (!Enabled || !_devMode.Value)
-            return;
+        LoadContracts();
+        ApplyAllContracts();
+        _logger.LogWarning("Sprite Contracts Reloaded");
+    }
 
-        if (UnityInput.Current.GetKeyDown(_reloadHotkey))
-        {
-            LoadContracts();
-            ApplyAllContracts();
-            Logger.LogWarning("Sprite Contracts Reloaded");
-        }
+    public void AddAtCursor(Vector3 mousePosition)
+    {
+        _logger.LogWarning("Adding Sprite Contracts at Cursor");
+        AddElementsToContracts(FindElementsAtCursor(mousePosition));
+    }
 
-        if (UnityInput.Current.GetKeyDown(_addAtCursorHotKey))
-        {
-            Logger.LogWarning("Adding Sprite Contracts at Cursor");
-            AddElementsToContracts(FindElementsAtCursor());
-        }
-
-        if (UnityInput.Current.GetKeyDown(_addAllHotKey))
-        {
-            Logger.LogWarning("Adding Sprite Contracts on Scene");
-            AddElementsToContracts(FindAllElements());
-        }
+    public void AddAll()
+    {
+        _logger.LogWarning("Adding Sprite Contracts on Scene");
+        AddElementsToContracts(SpriteReplacerService.FindAllElements());
     }
 
     public static void ApplyAllContracts()
@@ -107,7 +89,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
             }
             catch (Exception ex)
             {
-                Logger.LogError($"Error Loading sprite contract '{file}': {ex}");
+                _logger.LogError($"Error Loading sprite contract '{file}': {ex}");
             }
         }
 
@@ -130,20 +112,16 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
     public static Image[] FindAllElements()
     {
         // Find all TextMeshProUGUI components in the scene
-        return FindObjectsOfType<Image>();
+        return UnityEngine.Object.FindObjectsOfType<Image>();
     }
 
-
-    public Image[] FindElementsAtCursor()
+    public Image[] FindElementsAtCursor(Vector3 mousePosition)
     {
-        // Get the current mouse position
-        var mousePosition = UnityInput.Current.mousePosition;
-
         // Create a 10x10 pixel area around the cursor (20 pixel buffer on each side)
         var cursorArea = new Rect(mousePosition.x - 10, mousePosition.y - 10, 20, 20);
 
         // Find all elements in the scene
-        var elements = FindObjectsOfType<Image>();
+        var elements = UnityEngine.Object.FindObjectsOfType<Image>();
 
         var responseElements = new List<Image>();
 
@@ -236,7 +214,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
                         RenderTexture.ReleaseTemporary(renderTexture);
 
                         bytes = readableTexture.EncodeToPNG();
-                        Destroy(readableTexture);
+                        UnityEngine.Object.Destroy(readableTexture);
                     }
 
                     if (bytes == null || bytes.Length == 0)
@@ -260,7 +238,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
             var addedContractsFile = $"{_folder}/zzAdded.yaml";
             var newText = serializer.Serialize(foundContracts);
 
-            Logger.LogWarning($"Writing to {addedContractsFile}");
+            _logger.LogWarning($"Writing to {addedContractsFile}");
 
             if (!File.Exists(addedContractsFile))
                 File.WriteAllText(addedContractsFile, newText);
@@ -270,7 +248,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
             AddFoundContracts(foundContracts);
         }
         else
-            Logger.LogMessage("No new sprite elements found in scene");
+            _logger.LogMessage("No new sprite elements found in scene");
     }
 
     public string CalculateReplacement(string spriteName, string objectPath)
@@ -357,7 +335,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
 
         if (!File.Exists(spriteReplacementPath))
         {
-            Logger.LogError($"Sprite not found at path: {spriteReplacementPath}");
+            _logger.LogError($"Sprite not found at path: {spriteReplacementPath}");
             return;
         }
 
@@ -378,7 +356,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
             var rect = image.sprite.rect;
             if (rect.width > texture.width || rect.height > texture.height)
             {
-                Logger.LogWarning($"{spriteReplacementPath}: Texture dimensions are smaller than sprite rect, resizing");
+                _logger.LogWarning($"{spriteReplacementPath}: Texture dimensions are smaller than sprite rect, resizing");
                 rect.width = Mathf.Min(rect.width, texture.width);
                 rect.height = Mathf.Min(rect.height, texture.height);
             }
@@ -387,7 +365,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
         }
         catch (Exception ex)
         {
-            Logger.LogError($"Error replacing sprite: {ex}");
+            _logger.LogError($"Error replacing sprite: {ex}");
         }
     }
 

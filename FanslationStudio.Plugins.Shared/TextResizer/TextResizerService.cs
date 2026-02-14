@@ -1,7 +1,6 @@
-﻿using BepInEx;
-using BepInEx.Logging;
-using FanslationStudio.Plugins.Support;
+﻿using FanslationStudio.Plugins.Support;
 using HarmonyLib;
+using HarmonyLib.Tools;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -11,22 +10,10 @@ using UnityEngine;
 
 namespace FanslationStudio.Plugins.TextResizer;
 
-[BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.TextResizer", "TextResizer", MyPluginInfo.PLUGIN_VERSION)]
-internal class TextResizerPlugin : BaseUnityPlugin
+public class TextResizerService
 {
-    internal static new ManualLogSource Logger;
-    public static bool Enabled = true;
-    public static bool DevMode = false;
-
-    private KeyCode _addResizerAtCursorHotKey = KeyCode.KeypadMinus;
-    private KeyCode _addResizerAtCursorHotKey2 = KeyCode.F1;
-
-    private KeyCode _reloadHotkey = KeyCode.KeypadPlus;
-    private KeyCode _reloadHotkey2 = KeyCode.F2;
-
-    private KeyCode _addResizerHotKey = KeyCode.KeypadMultiply;
-    private KeyCode _addResizerHotKey2 = KeyCode.F3;
-
+    internal static IPluginLogger _logger;
+    public static bool _enabled = false;
     private string _resizerFolder;
 
     // Required Static for patches to see it
@@ -36,50 +23,48 @@ internal class TextResizerPlugin : BaseUnityPlugin
     // Cache for storing previously matched results
     public static Dictionary<string, TextResizerContract> CachedMatchedResizers = [];
 
-    private void Awake()
+
+    public TextResizerService(IPluginLogger logger, bool enabled, string bepinexRootPath)
     {
-        Logger = base.Logger;
+        _logger = logger;
+        _enabled = enabled;
+        _resizerFolder = Path.Combine(bepinexRootPath, "sprites2");
+    }
 
-        Enabled = Config.Bind("General", "TextResizerEnabled", true, "Enable Text Resizer plugin").Value;
-
-        if (!Enabled)
+    public void Awake()
+    {
+        if (!_enabled)
             return; 
 
-        Harmony.CreateAndPatchAll(typeof(TextResizerPlugin));
-        Logger.LogWarning($"TextResizer Plugin should be patched!");
+        Harmony.CreateAndPatchAll(typeof(TextResizerService));
+        _logger.LogWarning($"TextResizer Plugin should be patched!");
 
-        _resizerFolder = Path.Combine(Paths.BepInExRootPath, "resizers");
         if (!Directory.Exists(_resizerFolder))
             Directory.CreateDirectory(_resizerFolder);
 
         LoadResizers();
-        Logger.LogWarning($"TextResizer Plugin Loaded!");
+        _logger.LogWarning($"TextResizer Plugin Loaded!");
     }
 
-    internal void Update()
+
+    public void Reload()
     {
-        if (UnityInput.Current.GetKeyDown(_reloadHotkey)
-            || (DevMode && UnityInput.Current.GetKeyDown(_reloadHotkey2)))
-        {
-            LoadResizers();
-            ApplyAllResizers();
-            Logger.LogWarning("Resizers Reloaded");
-        }
-
-        if (UnityInput.Current.GetKeyDown(_addResizerHotKey)
-            || (DevMode && UnityInput.Current.GetKeyDown(_addResizerHotKey2)))
-        {
-            Logger.LogWarning("Adding Resizers for Scene");
-            AddTextElementsToResizers(FindAllTextElements());
-        }
-
-        if (UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey)
-            || (DevMode && UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey2)))
-        {
-            Logger.LogWarning("Adding Resizers at Cursor");
-            AddTextElementsToResizers(FindTextElementsUnderCursor(), addUnderCursor: true);
-        }
+        LoadResizers();
+        ApplyAllResizers();
+        _logger.LogWarning("Resizers Reloaded");
     }
+
+    public void AddResizersForScene()
+    {
+        _logger.LogWarning("Adding Resizers for Scene");
+        AddTextElementsToResizers(FindAllTextElements());
+    }
+
+    public void AddResizersAtCursor(Vector3 mousePosition)
+    {
+        _logger.LogWarning("Adding Resizers at Cursor");
+        AddTextElementsToResizers(FindTextElementsUnderCursor(mousePosition), addUnderCursor: true);
+    }    
 
     public void LoadResizers()
     {
@@ -103,7 +88,7 @@ internal class TextResizerPlugin : BaseUnityPlugin
             }
             catch (Exception ex)
             {
-                Logger.LogError($"Error Loading resizer '{file}': {ex}");
+                _logger.LogError($"Error Loading resizer '{file}': {ex}");
             }
         }
 
@@ -117,16 +102,13 @@ internal class TextResizerPlugin : BaseUnityPlugin
                 Resizers.Add(newResizer.Path, newResizer);
     }
 
-    public TextMeshProUGUI[] FindTextElementsUnderCursor()
+    public TextMeshProUGUI[] FindTextElementsUnderCursor(Vector3 mousePosition)
     {
-        // Get the current mouse position
-        var mousePosition = UnityInput.Current.mousePosition;
-
         // Create a 10x10 pixel area around the cursor (20 pixel buffer on each side)
         var cursorArea = new Rect(mousePosition.x - 10, mousePosition.y - 10, 20, 20);
 
         // Find all TextMeshProUGUI components in the scene
-        var textElements = FindObjectsOfType<TextMeshProUGUI>();
+        var textElements = UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();
 
         var responseElements = new List<TextMeshProUGUI>();
 
@@ -167,7 +149,7 @@ internal class TextResizerPlugin : BaseUnityPlugin
     public static TextMeshProUGUI[] FindAllTextElements()
     {
         // Find all TextMeshProUGUI components in the scene
-        return FindObjectsOfType<TextMeshProUGUI>();
+        return UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();
     }
 
     public void AddTextElementsToResizers(TextMeshProUGUI[] textElements, bool addUnderCursor = false, bool copyUnderCursor = false)
@@ -207,7 +189,7 @@ internal class TextResizerPlugin : BaseUnityPlugin
             var addedResizersFile = $"{_resizerFolder}/zzAddedResizers.yaml";
             var newText = serializer.Serialize(foundResizers);
 
-            Logger.LogWarning($"Writing to {addedResizersFile}");
+            _logger.LogWarning($"Writing to {addedResizersFile}");
 
             if (!File.Exists(addedResizersFile))
                 File.WriteAllText(addedResizersFile, newText);
@@ -218,7 +200,7 @@ internal class TextResizerPlugin : BaseUnityPlugin
         }
         else
         {
-            Logger.LogMessage("No new text elements found in scene");
+            _logger.LogMessage("No new text elements found in scene");
         }
     }
 
@@ -302,7 +284,7 @@ internal class TextResizerPlugin : BaseUnityPlugin
             // Text Alignment
             var validAlignment = Enum.TryParse<TextAlignmentOptions>(resizer.Alignment, true, out var alignment);
             if (resizer.Alignment != string.Empty && !validAlignment)
-                Logger.LogWarning($"Invalid alignment value: {resizer.Alignment} on {resizer.Path}");
+                _logger.LogWarning($"Invalid alignment value: {resizer.Alignment} on {resizer.Path}");
 
             if (validAlignment && textComponent.alignment != alignment)
             {
@@ -315,7 +297,7 @@ internal class TextResizerPlugin : BaseUnityPlugin
 
             var validOverflow = Enum.TryParse<TextOverflowModes>(resizer.OverflowMode, true, out var overflowMode);
             if (resizer.OverflowMode != string.Empty && !validOverflow)
-                Logger.LogWarning($"Invalid overflow value: {resizer.OverflowMode} on {resizer.Path}");
+                _logger.LogWarning($"Invalid overflow value: {resizer.OverflowMode} on {resizer.Path}");
 
             if (validOverflow && textComponent.overflowMode != overflowMode)
             {
@@ -407,7 +389,7 @@ internal class TextResizerPlugin : BaseUnityPlugin
         }
         catch (Exception ex)
         {
-            Logger.LogError($"Error applying resizer to {textComponent.name}: {ex}");
+            _logger.LogError($"Error applying resizer to {textComponent.name}: {ex}");
         }
     }
 

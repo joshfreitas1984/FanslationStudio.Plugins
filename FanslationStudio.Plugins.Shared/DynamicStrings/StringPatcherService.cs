@@ -1,6 +1,4 @@
-﻿using BepInEx;
-using BepInEx.Logging;
-using FanslationStudio.Plugins.Support;
+﻿using FanslationStudio.Plugins.Support;
 using HarmonyLib;
 using System;
 using System.Collections;
@@ -14,27 +12,32 @@ namespace FanslationStudio.Plugins.DynamicStrings;
 /// <summary>
 /// Used to replace hardcoded strings in IL
 /// </summary>
-[BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher", "DynamicStringPatcher", MyPluginInfo.PLUGIN_VERSION)]
-public class StringPatcherPlugin : BaseUnityPlugin
+public class StringPatcherService
 {
-    internal static new ManualLogSource Logger;
-    private Harmony _harmony;
     private readonly Dictionary<string, Type> _cachedTypes = [];
-    public static bool Enabled = true;
 
-    private void Awake()
+    public static IPluginLogger Logger;
+    private static bool _enabled = false;
+    private Harmony _harmony;
+    private string _bepinExRootPath;
+
+    public StringPatcherService(IPluginLogger logger, bool enabled, Harmony harmony, string bepinExRootPath)
     {
-        Logger = base.Logger;
+        Logger = logger;
+        _enabled = enabled;
+        _harmony = harmony;
+        _bepinExRootPath = bepinExRootPath;
+    }
 
-        if (!Enabled)
+    public void Awake()
+    {
+        if (!_enabled)
             return;
-
-        _harmony = new Harmony($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher");
 
         Logger.LogMessage("Dynamic String Patcher loading...");
 
         // Load translations from CSV
-        var resourcePath = Path.Combine(Paths.BepInExRootPath, "resources");
+        var resourcePath = Path.Combine(_bepinExRootPath, "resources");
         var filePath = Path.Combine(resourcePath, "dynamicStrings.txt");
 
         if (File.Exists(filePath))
