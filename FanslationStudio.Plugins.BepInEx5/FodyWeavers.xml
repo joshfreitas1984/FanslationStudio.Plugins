@@ -3,6 +3,7 @@
   <Costura>
     <IncludeAssemblies>
       YamlDotNet
+      FanslationStudio.Plugins.Shared
     </IncludeAssemblies>
   </Costura>
 </Weavers>
