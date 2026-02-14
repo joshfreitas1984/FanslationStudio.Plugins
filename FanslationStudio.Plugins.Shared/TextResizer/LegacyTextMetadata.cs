@@ -18,6 +18,9 @@ public class LegacyTextMetadata : MonoBehaviour
 
     public int OriginalFontSize;
     public float OriginalLineSpacing;
+    public bool OriginalResizeTextForBestFit;
+    public int OriginalResizeTextMinSize;
+    public int OriginalResizeTextMaxSize;
 
     public float AdjustX;
     public float AdjustY;

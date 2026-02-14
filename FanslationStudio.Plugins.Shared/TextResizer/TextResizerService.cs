@@ -24,6 +24,12 @@ public class TextResizerService
     // Cache for storing previously matched results
     public static Dictionary<string, TextResizerContract> CachedMatchedResizers = [];
 
+    // Cache compiled regex patterns for wildcard matching
+    private static Dictionary<string, Regex> CompiledRegexCache = [];
+
+    // Flag to prevent recursion in text setter patches
+    private static bool _isApplyingResizer = false;
+
 
     public TextResizerService(IPluginLogger logger, bool enabled, string bepinexRootPath)
     {
@@ -80,6 +86,7 @@ public class TextResizerService
         var deserializer = Yaml.CreateDeserializer();
         Resizers.Clear();
         CachedMatchedResizers.Clear();
+        CompiledRegexCache.Clear();
 
         var resizerFiles = Directory.EnumerateFiles(_resizerFolder, "*.yaml");
         foreach (var file in resizerFiles)
@@ -344,17 +351,18 @@ public class TextResizerService
         if (textComponent.gameObject == null)
             return;
 
+        if (_isApplyingResizer)
+            return;
+
         try
         {
+            _isApplyingResizer = true;
+
             textComponent.wordWrappingRatios = 1.0f; //Disable Word wrapping ratios (should stop eastern rules)
             textComponent.enableKerning = false;
 
             var path = ObjectHelper.GetGameObjectPath(textComponent.gameObject);
             var resizer = FindAppropriateResizer(path);
-
-            // Cache the wildcard match so we only have to match once
-            if (!CachedMatchedResizers.ContainsKey(path))
-                CachedMatchedResizers.Add(path, resizer);
 
             if (resizer == null)
                 return;
@@ -523,6 +531,10 @@ public class TextResizerService
         {
             _logger.LogError($"Error applying resizer to {textComponent.name}: {ex}");
         }
+        finally
+        {
+            _isApplyingResizer = false;
+        }
     }
 
     public static void ApplyResizingToLegacyText(Text textComponent)
@@ -533,14 +545,15 @@ public class TextResizerService
         if (textComponent.gameObject == null)
             return;
 
+        if (_isApplyingResizer)
+            return;
+
         try
         {
+            _isApplyingResizer = true;
+
             var path = ObjectHelper.GetGameObjectPath(textComponent.gameObject);
             var resizer = FindAppropriateResizer(path);
-
-            // Cache the wildcard match so we only have to match once
-            if (!CachedMatchedResizers.ContainsKey(path))
-                CachedMatchedResizers.Add(path, resizer);
 
             if (resizer == null)
                 return;
@@ -562,6 +575,9 @@ public class TextResizerService
                 metadata.OriginalHorizontalOverflow = textComponent.horizontalOverflow;
                 metadata.OriginalVerticalOverflow = textComponent.verticalOverflow;
                 metadata.OriginalFontSize = textComponent.fontSize;
+                metadata.OriginalResizeTextForBestFit = textComponent.resizeTextForBestFit;
+                metadata.OriginalResizeTextMinSize = textComponent.resizeTextMinSize;
+                metadata.OriginalResizeTextMaxSize = textComponent.resizeTextMaxSize;
             }
 
             // Set this so we can debug bad resizers
@@ -641,6 +657,34 @@ public class TextResizerService
                 }
             }
 
+            // Auto Sizing (Best Fit)
+            if (resizer.AllowAutoSizing.HasValue
+                && textComponent.resizeTextForBestFit != resizer.AllowAutoSizing.Value)
+            {
+                textComponent.resizeTextForBestFit = resizer.AllowAutoSizing.Value;
+            }
+            else if (!resizer.AllowAutoSizing.HasValue
+                && textComponent.resizeTextForBestFit != metadata.OriginalResizeTextForBestFit)
+            {
+                textComponent.resizeTextForBestFit = metadata.OriginalResizeTextForBestFit;
+            }
+
+            // Auto Sizing configuration
+            if (textComponent.resizeTextForBestFit)
+            {
+                if (resizer.MinFontSize.HasValue
+                    && resizer.MinFontSize != textComponent.resizeTextMinSize)
+                {
+                    textComponent.resizeTextMinSize = (int)resizer.MinFontSize.Value;
+                }
+
+                if (resizer.MaxFontSize.HasValue
+                    && resizer.MaxFontSize != textComponent.resizeTextMaxSize)
+                {
+                    textComponent.resizeTextMaxSize = (int)resizer.MaxFontSize.Value;
+                }
+            }
+
             // Spacing
             if (resizer.LineSpacing.HasValue
                 && resizer.LineSpacing != textComponent.lineSpacing)
@@ -658,6 +702,10 @@ public class TextResizerService
         catch (Exception ex)
         {
             _logger.LogError($"Error applying resizer to legacy text {textComponent.name}: {ex}");
+        }
+        finally
+        {
+            _isApplyingResizer = false;
         }
     }
 
@@ -705,28 +753,29 @@ public class TextResizerService
 
             if (resizer.Path.Contains("*"))
             {
-                //Logger.LogError("Falling to Non compiled!");
+                if (!CompiledRegexCache.TryGetValue(resizer.Path, out var regex))
+                {
+                    var pattern = resizer.Path
+                        .Replace("/", @"\/")
+                        .Replace("(", @"\(")
+                        .Replace(")", @"\)")
+                        .Replace("[", @"\[")
+                        .Replace("]", @"\]")
+                        .Replace("*", ".*");
 
-                // Convert to Regex
-                var pattern = resizer.Path
-                    .Replace("/", @"\/")
-                    .Replace("(", @"\(")
-                    .Replace(")", @"\)")
-                    .Replace("*", ".*");
+                    regex = new Regex(pattern, RegexOptions.Compiled);
+                    CompiledRegexCache[resizer.Path] = regex;
+                }
 
-                if (Regex.IsMatch(path, pattern))
+                if (regex.IsMatch(path))
+                {
+                    CachedMatchedResizers[path] = resizer;
                     return resizer;
-
-                // Use our new wildcard matching service
-                //var match = _wildcardMatcher.FindMatch(path);
-                //if (match != null)
-                //{
-                //    cache[path] = resizer; // Cache the result
-                //    return resizer;
-                //}
+                }
             }
         }
 
+        CachedMatchedResizers[path] = null;
         return null;
     }
 
@@ -740,18 +789,16 @@ public class TextResizerService
     }
 
     [HarmonyPostfix, HarmonyPatch(typeof(GameObject), nameof(GameObject.SetActive), [typeof(bool)])]
-    public static void Postfix_GameObject_SetActive(GameObject __instance)
+    public static void Postfix_GameObject_SetActive(GameObject __instance, bool value)
     {
-        if (!ResizersLoaded)
+        if (!ResizersLoaded || !value)
             return;
 
-        //TODO: This should be most efficient but we could use Object.Instantiate
-        //to get it at as the objects created. But maybe there is post processing occuring after.
-        var tmpItems = __instance.GetComponentsInChildren<TextMeshProUGUI>();
+        var tmpItems = __instance.GetComponentsInChildren<TextMeshProUGUI>(false);
         foreach (var item in tmpItems)
             ApplyResizing(item);
 
-        var textItems = __instance.GetComponentsInChildren<Text>();
+        var textItems = __instance.GetComponentsInChildren<Text>(false);
         foreach (var item in textItems)
             ApplyResizingToLegacyText(item);
     }
