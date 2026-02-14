@@ -755,4 +755,41 @@ public class TextResizerService
         foreach (var item in textItems)
             ApplyResizingToLegacyText(item);
     }
+
+    [HarmonyPostfix, HarmonyPatch(typeof(TextMeshProUGUI), "OnEnable", MethodType.Normal)]
+    public static void Postfix_TMP_OnEnable(TextMeshProUGUI __instance)
+    {
+        if (!ResizersLoaded)
+            return;
+
+        ApplyResizing(__instance);
+    }
+
+    [HarmonyPostfix, HarmonyPatch(typeof(Text), "OnEnable", MethodType.Normal)]
+    public static void Postfix_Text_OnEnable(Text __instance)
+    {
+        if (!ResizersLoaded)
+            return;
+
+        ApplyResizingToLegacyText(__instance);
+    }
+
+    [HarmonyPostfix, HarmonyPatch(typeof(TMP_Text), "text", MethodType.Setter)]
+    public static void Postfix_TMP_SetText(TMP_Text __instance)
+    {
+        if (!ResizersLoaded)
+            return;
+
+        if (__instance is TextMeshProUGUI tmpugui)
+            ApplyResizing(tmpugui);
+    }
+
+    [HarmonyPostfix, HarmonyPatch(typeof(Text), "text", MethodType.Setter)]
+    public static void Postfix_Text_SetText(Text __instance)
+    {
+        if (!ResizersLoaded)
+            return;
+
+        ApplyResizingToLegacyText(__instance);
+    }
 }
