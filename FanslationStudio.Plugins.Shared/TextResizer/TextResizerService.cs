@@ -7,6 +7,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace FanslationStudio.Plugins.TextResizer;
 
@@ -28,7 +29,7 @@ public class TextResizerService
     {
         _logger = logger;
         _enabled = enabled;
-        _resizerFolder = Path.Combine(bepinexRootPath, "sprites2");
+        _resizerFolder = Path.Combine(bepinexRootPath, "resizers");
     }
 
     public void Awake()
@@ -57,14 +58,20 @@ public class TextResizerService
     public void AddResizersForScene()
     {
         _logger.LogWarning("Adding Resizers for Scene");
-        AddTextElementsToResizers(FindAllTextElements());
+        var tmpElements = FindAllTextElements();
+        var textElements = FindAllLegacyTextElements();
+        AddTextElementsToResizers(tmpElements);
+        AddLegacyTextElementsToResizers(textElements);
     }
 
     public void AddResizersAtCursor(float x, float y, float z)
     {
         _logger.LogWarning("Adding Resizers at Cursor");
-        AddTextElementsToResizers(FindTextElementsUnderCursor(x, y, z), addUnderCursor: true);
-    }    
+        var tmpElements = FindTextElementsUnderCursor(x, y, z);
+        var textElements = FindLegacyTextElementsUnderCursor(x, y, z);
+        AddTextElementsToResizers(tmpElements, addUnderCursor: true);
+        AddLegacyTextElementsToResizers(textElements, addUnderCursor: true);
+    }
 
     public void LoadResizers()
     {
@@ -146,6 +153,50 @@ public class TextResizerService
         return responseElements.ToArray();
     }
 
+    public Text[] FindLegacyTextElementsUnderCursor(float x, float y, float z)
+    {
+        // Create a 10x10 pixel area around the cursor (20 pixel buffer on each side)
+        var cursorArea = new Rect(x - 10, y - 10, 20, 20);
+
+        // Find all Text components in the scene
+        var textElements = UnityEngine.Object.FindObjectsOfType<Text>();
+
+        var responseElements = new List<Text>();
+
+        foreach (Text textElement in textElements)
+        {
+            // Get the RectTransform to check if it contains the cursor position
+            var rectTransform = textElement.rectTransform;
+            if (rectTransform == null) continue;
+
+            // Check if the text element's screen rect overlaps with our cursor area
+            Canvas canvas = textElement.canvas;
+            if (canvas == null) continue;
+
+            // Get the screen rect of the text element
+            Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
+            Rect screenRect = RectTransformUtility.PixelAdjustRect(rectTransform, canvas);
+
+            // Convert the rect to screen coordinates if not in overlay mode
+            if (canvas.renderMode != RenderMode.ScreenSpaceOverlay && camera != null)
+            {
+                Vector3[] corners = new Vector3[4];
+                rectTransform.GetWorldCorners(corners);
+
+                // Convert world corners to screen points
+                Vector2 min = camera.WorldToScreenPoint(corners[0]);
+                Vector2 max = camera.WorldToScreenPoint(corners[2]);
+                screenRect = new Rect(min.x, min.y, max.x - min.x, max.y - min.y);
+            }
+
+            // Check if the cursor area overlaps with the text element's screen rect
+            if (screenRect.Overlaps(cursorArea))
+                responseElements.Add(textElement);
+        }
+
+        return responseElements.ToArray();
+    }
+
     public static TextMeshProUGUI[] FindAllTextElements()
     {
         // Find all TextMeshProUGUI components in the scene
@@ -178,6 +229,12 @@ public class TextResizerService
         //    }
 
         return elems;
+    }
+
+    public static Text[] FindAllLegacyTextElements()
+    {
+        // Find all Text components in the scene
+        return UnityEngine.Object.FindObjectsOfType<Text>();
     }
 
     public void AddTextElementsToResizers(TextMeshProUGUI[] textElements, bool addUnderCursor = false, bool copyUnderCursor = false)
@@ -228,7 +285,54 @@ public class TextResizerService
         }
         else
         {
-            _logger.LogMessage("No new text elements found in scene");
+            _logger.LogMessage("No new TextMeshProUGUI elements found in scene");
+        }
+    }
+
+    public void AddLegacyTextElementsToResizers(Text[] textElements, bool addUnderCursor = false, bool copyUnderCursor = false)
+    {
+        var foundResizers = new List<TextResizerContract>();
+
+        foreach (Text textElement in textElements)
+        {
+            // Log information about the text element
+            var path = ObjectHelper.GetGameObjectPath(textElement.gameObject);
+
+            if (!Resizers.ContainsKey(path))
+            {
+                // Create a new resizer contract for this text element
+                var newResizer = new TextResizerContract()
+                {
+                    Path = path,
+                    SampleText = textElement.text,
+                    IdealFontSize = textElement.fontSize,
+                    AllowWordWrap = textElement.horizontalOverflow == HorizontalWrapMode.Wrap,
+                    AllowLeftTrimText = false,
+                };
+
+                foundResizers.Add(newResizer);
+            }
+        }
+
+        if (foundResizers.Count > 0)
+        {
+            var serializer = Yaml.CreateSerializer();
+
+            var addedResizersFile = $"{_resizerFolder}/zzAddedResizers.yaml";
+            var newText = serializer.Serialize(foundResizers);
+
+            _logger.LogWarning($"Writing to {addedResizersFile}");
+
+            if (!File.Exists(addedResizersFile))
+                File.WriteAllText(addedResizersFile, newText);
+            else
+                File.AppendAllText(addedResizersFile, newText);
+
+            AddFoundResizers(foundResizers);
+        }
+        else
+        {
+            _logger.LogMessage("No new UI.Text elements found in scene");
         }
     }
 
@@ -421,6 +525,170 @@ public class TextResizerService
         }
     }
 
+    public static void ApplyResizingToLegacyText(Text textComponent)
+    {
+        if (textComponent == null)
+            return;
+
+        if (textComponent.gameObject == null)
+            return;
+
+        try
+        {
+            var path = ObjectHelper.GetGameObjectPath(textComponent.gameObject);
+            var resizer = FindAppropriateResizer(path);
+
+            // Cache the wildcard match so we only have to match once
+            if (!CachedMatchedResizers.ContainsKey(path))
+                CachedMatchedResizers.Add(path, resizer);
+
+            if (resizer == null)
+                return;
+
+            // Cache components
+            var rectTransform = textComponent.rectTransform;
+            var metadata = textComponent.GetComponent<LegacyTextMetadata>();
+
+            // If metadata is not attached, add it and store the original values against it
+            if (metadata == null)
+            {
+                metadata = textComponent.gameObject.AddComponent<LegacyTextMetadata>();
+                metadata.OriginalX = rectTransform.anchoredPosition.x;
+                metadata.OriginalY = rectTransform.anchoredPosition.y;
+                metadata.OriginalWidth = rectTransform.sizeDelta.x;
+                metadata.OriginalHeight = rectTransform.sizeDelta.y;
+                metadata.OriginalLineSpacing = textComponent.lineSpacing;
+                metadata.OriginalAlignment = textComponent.alignment;
+                metadata.OriginalHorizontalOverflow = textComponent.horizontalOverflow;
+                metadata.OriginalVerticalOverflow = textComponent.verticalOverflow;
+                metadata.OriginalFontSize = textComponent.fontSize;
+            }
+
+            // Set this so we can debug bad resizers
+            metadata.ActiveResizerPath = resizer.Path;
+
+            // Apply position change if needed
+            if (resizer.AdjustX != metadata.AdjustX
+                || resizer.AdjustY != metadata.AdjustY)
+            {
+                metadata.AdjustX = resizer.AdjustX;
+                metadata.AdjustY = resizer.AdjustY;
+                rectTransform.anchoredPosition = new Vector2(metadata.OriginalX + resizer.AdjustX, metadata.OriginalY + resizer.AdjustY);
+            }
+
+            // Apply size change if needed
+            if (resizer.AdjustWidth != metadata.AdjustWidth
+                || resizer.AdjustHeight != metadata.AdjustHeight)
+            {
+                metadata.AdjustWidth = resizer.AdjustWidth;
+                metadata.AdjustHeight = resizer.AdjustHeight;
+                rectTransform.sizeDelta = new Vector2(metadata.OriginalWidth + metadata.AdjustWidth, metadata.OriginalHeight + metadata.AdjustHeight);
+            }
+
+            // Apply the resizing
+            if (textComponent.fontSize != resizer.IdealFontSize
+                && resizer.IdealFontSize != null)
+            {
+                textComponent.fontSize = (int)resizer.IdealFontSize.Value;
+            }
+            else if (resizer.FontPercentage != null)
+            {
+                textComponent.fontSize = (int)(metadata.OriginalFontSize * resizer.FontPercentage ?? 1);
+            }
+
+            // Text Alignment - convert from TMP alignment to legacy Text alignment
+            if (!string.IsNullOrEmpty(resizer.Alignment))
+            {
+                var alignment = ConvertTMPAlignmentToTextAnchor(resizer.Alignment);
+                if (alignment.HasValue && textComponent.alignment != alignment.Value)
+                {
+                    textComponent.alignment = alignment.Value;
+                }
+            }
+            else if (textComponent.alignment != metadata.OriginalAlignment)
+            {
+                textComponent.alignment = metadata.OriginalAlignment;
+            }
+
+            // Overflow mode - map TMP overflow to legacy Text overflow
+            if (!string.IsNullOrEmpty(resizer.OverflowMode))
+            {
+                var (horizontal, vertical) = ConvertTMPOverflowToTextOverflow(resizer.OverflowMode);
+                if (horizontal.HasValue && textComponent.horizontalOverflow != horizontal.Value)
+                {
+                    textComponent.horizontalOverflow = horizontal.Value;
+                }
+                if (vertical.HasValue && textComponent.verticalOverflow != vertical.Value)
+                {
+                    textComponent.verticalOverflow = vertical.Value;
+                }
+            }
+            else
+            {
+                if (textComponent.horizontalOverflow != metadata.OriginalHorizontalOverflow)
+                    textComponent.horizontalOverflow = metadata.OriginalHorizontalOverflow;
+                if (textComponent.verticalOverflow != metadata.OriginalVerticalOverflow)
+                    textComponent.verticalOverflow = metadata.OriginalVerticalOverflow;
+            }
+
+            // Word Wrap
+            if (resizer.AllowWordWrap.HasValue)
+            {
+                var horizontalOverflow = resizer.AllowWordWrap.Value ? HorizontalWrapMode.Wrap : HorizontalWrapMode.Overflow;
+                if (textComponent.horizontalOverflow != horizontalOverflow)
+                {
+                    textComponent.horizontalOverflow = horizontalOverflow;
+                }
+            }
+
+            // Spacing
+            if (resizer.LineSpacing.HasValue
+                && resizer.LineSpacing != textComponent.lineSpacing)
+            {
+                textComponent.lineSpacing = resizer.LineSpacing.Value;
+            }
+
+            if (resizer.AllowLeftTrimText)
+            {
+                var trimmed = textComponent.text.TrimStart(' ', '\t', '\n', '\r');
+                if (textComponent.text != trimmed)
+                    textComponent.text = trimmed;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error applying resizer to legacy text {textComponent.name}: {ex}");
+        }
+    }
+
+    private static TextAnchor? ConvertTMPAlignmentToTextAnchor(string tmpAlignment)
+    {
+        return tmpAlignment?.ToLower() switch
+        {
+            "topleft" => TextAnchor.UpperLeft,
+            "top" => TextAnchor.UpperCenter,
+            "topright" => TextAnchor.UpperRight,
+            "left" => TextAnchor.MiddleLeft,
+            "center" => TextAnchor.MiddleCenter,
+            "right" => TextAnchor.MiddleRight,
+            "bottomleft" => TextAnchor.LowerLeft,
+            "bottom" => TextAnchor.LowerCenter,
+            "bottomright" => TextAnchor.LowerRight,
+            _ => null
+        };
+    }
+
+    private static (HorizontalWrapMode?, VerticalWrapMode?) ConvertTMPOverflowToTextOverflow(string tmpOverflow)
+    {
+        return tmpOverflow?.ToLower() switch
+        {
+            "overflow" => (HorizontalWrapMode.Overflow, VerticalWrapMode.Overflow),
+            "ellipsis" => (HorizontalWrapMode.Overflow, VerticalWrapMode.Truncate),
+            "truncate" => (HorizontalWrapMode.Overflow, VerticalWrapMode.Truncate),
+            _ => (null, null)
+        };
+    }
+
     public static TextResizerContract FindAppropriateResizer(string path)
     {
         if (Resizers.TryGetValue(path, out var tryResizer))
@@ -466,6 +734,9 @@ public class TextResizerService
     {
         foreach (var textElement in FindAllTextElements())
             ApplyResizing(textElement);
+
+        foreach (var textElement in FindAllLegacyTextElements())
+            ApplyResizingToLegacyText(textElement);
     }
 
     [HarmonyPostfix, HarmonyPatch(typeof(GameObject), nameof(GameObject.SetActive), [typeof(bool)])]
@@ -476,8 +747,12 @@ public class TextResizerService
 
         //TODO: This should be most efficient but we could use Object.Instantiate
         //to get it at as the objects created. But maybe there is post processing occuring after.
-        var items = __instance.GetComponentsInChildren<TextMeshProUGUI>();
-        foreach (var item in items)
+        var tmpItems = __instance.GetComponentsInChildren<TextMeshProUGUI>();
+        foreach (var item in tmpItems)
             ApplyResizing(item);
+
+        var textItems = __instance.GetComponentsInChildren<Text>();
+        foreach (var item in textItems)
+            ApplyResizingToLegacyText(item);
     }
 }

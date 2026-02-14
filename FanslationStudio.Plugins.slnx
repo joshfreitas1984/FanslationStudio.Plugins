@@ -7,4 +7,5 @@
   <Project Path="FanslationStudio.Plugins.BepInEx5/FanslationStudio.Plugins.BepInEx5.csproj" />
   <Project Path="FanslationStudio.Plugins.BepInEx6/FanslationStudio.Plugins.BepInEx6.csproj" />
   <Project Path="FanslationStudio.Plugins.Shared/FanslationStudio.Plugins.Shared.csproj" />
+  <Project Path="FanslationStudio.Plugins.Tests/FanslationStudio.Plugins.Tests.csproj" Id="e3ad1c5e-e4c3-4b74-b3e4-d05777967775" />
 </Solution>
