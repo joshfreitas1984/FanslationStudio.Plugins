@@ -1,16 +1,11 @@
-﻿using YamlDotNet.Core;
-using YamlDotNet.Serialization;
-
-namespace FanslationStudio.Plugins.TextResizer;
+﻿namespace FanslationStudio.Plugins.TextResizer;
 
 public record TextResizerContract
 {
     // Text Component Details
 
-    [YamlMember(ScalarStyle = ScalarStyle.DoubleQuoted)]
     public string Path = string.Empty;
 
-    [YamlMember(ScalarStyle = ScalarStyle.DoubleQuoted)]
     public string SampleText = string.Empty;
 
     public float? IdealFontSize;
@@ -21,10 +16,8 @@ public record TextResizerContract
 
     public float? MaxFontSize;
 
-    [YamlMember(ScalarStyle = ScalarStyle.DoubleQuoted)]
     public string Alignment = string.Empty;
 
-    [YamlMember(ScalarStyle = ScalarStyle.DoubleQuoted)]
     public string OverflowMode = string.Empty;
 
     public bool? AllowWordWrap;

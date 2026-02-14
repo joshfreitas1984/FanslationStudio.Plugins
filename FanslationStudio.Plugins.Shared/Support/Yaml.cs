@@ -1,93 +1,147 @@
 ﻿using System;
 using System.Collections.Generic;
-using YamlDotNet.Serialization;
-using YamlDotNet.Serialization.NamingConventions;
-using YamlDotNet.Serialization.TypeInspectors;
+using System.Linq;
+using SharpYaml;
+using SharpYaml.Serialization;
+using SharpYaml.Serialization.Descriptors;
+using SharpYaml.Serialization.Serializers;
 
 namespace FanslationStudio.Plugins.Support;
 
 public class Yaml
 {
-    public static ISerializer CreateSerializer()
+    public static Serializer CreateSerializer()
     {
-        return new SerializerBuilder()
-           .WithNamingConvention(CamelCaseNamingConvention.Instance)
-           .WithTypeInspector(inner => new DefaultExcludingTypeInspector(inner))
-           .Build();
+        var settings = new SerializerSettings
+        {
+            NamingConvention = new CamelCaseNamingConvention(),
+            EmitDefaultValues = false,
+            EmitTags = false,
+            SortKeyForMapping = false,
+            ComparerForKeySorting = null,
+            ObjectSerializerBackend = new DefaultValueExcludingBackend()
+        };
+
+        return new Serializer(settings);
     }
 
-    public static IDeserializer CreateDeserializer()
+    public static Serializer CreateDeserializer()
     {
-        return new DeserializerBuilder()
-            .WithNamingConvention(CamelCaseNamingConvention.Instance)
-            .IgnoreUnmatchedProperties()
-            .Build();
+        var settings = new SerializerSettings
+        {
+            NamingConvention = new CamelCaseNamingConvention(),
+            EmitTags = false
+        };
+
+        return new Serializer(settings);
     }
 }
 
-public class DefaultExcludingTypeInspector : TypeInspectorSkeleton
+public class DefaultValueExcludingBackend : IObjectSerializerBackend
 {
-    private readonly ITypeInspector _innerTypeInspector;
+    private readonly DefaultObjectSerializerBackend _defaultBackend = new DefaultObjectSerializerBackend();
     private readonly Dictionary<Type, object> _defaultInstances = new Dictionary<Type, object>();
+    private bool _skipCurrentMember = false;
 
-    public DefaultExcludingTypeInspector(ITypeInspector innerTypeInspector)
+    public YamlStyle GetStyle(ref ObjectContext objectContext)
     {
-        _innerTypeInspector = innerTypeInspector;
+        return _defaultBackend.GetStyle(ref objectContext);
     }
 
-    public override string GetEnumName(Type enumType, string name)
+    public string ReadMemberName(ref ObjectContext objectContext, string name, out bool skipMember)
     {
-        return _innerTypeInspector.GetEnumName(enumType, name);
+        return _defaultBackend.ReadMemberName(ref objectContext, name, out skipMember);
     }
 
-    public override string GetEnumValue(object enumValue)
+    public object ReadMemberValue(ref ObjectContext objectContext, IMemberDescriptor member, object memberValue, Type memberType)
     {
-        return _innerTypeInspector.GetEnumValue(enumValue);
+        return _defaultBackend.ReadMemberValue(ref objectContext, member, memberValue, memberType);
     }
 
-    public override IEnumerable<IPropertyDescriptor> GetProperties(Type type, object container)
+    public object ReadCollectionItem(ref ObjectContext objectContext, object value, Type itemType, int index)
     {
-        var properties = _innerTypeInspector.GetProperties(type, container);
+        return _defaultBackend.ReadCollectionItem(ref objectContext, value, itemType, index);
+    }
+
+    public KeyValuePair<object, object> ReadDictionaryItem(ref ObjectContext objectContext, KeyValuePair<Type, Type> keyValueType)
+    {
+        return _defaultBackend.ReadDictionaryItem(ref objectContext, keyValueType);
+    }
+
+    public void WriteMemberName(ref ObjectContext objectContext, IMemberDescriptor member, string name)
+    {
+        // Check if we should skip this member
+        _skipCurrentMember = ShouldSkipMember(ref objectContext, member);
+
+        if (!_skipCurrentMember)
+        {
+            _defaultBackend.WriteMemberName(ref objectContext, member, name);
+        }
+    }
+
+    public void WriteMemberValue(ref ObjectContext objectContext, IMemberDescriptor member, object memberValue, Type memberType)
+    {
+        // Only write if we didn't skip the member name
+        if (!_skipCurrentMember)
+        {
+            _defaultBackend.WriteMemberValue(ref objectContext, member, memberValue, memberType);
+        }
+
+        // Reset the flag
+        _skipCurrentMember = false;
+    }
+
+    private bool ShouldSkipMember(ref ObjectContext objectContext, IMemberDescriptor member)
+    {
+        // Get the member value
+        var memberValue = member.Get(objectContext.Instance);
+
+        // Skip if value is null
+        if (memberValue == null)
+        {
+            return true;
+        }
+
+        var objectType = objectContext.Instance.GetType();
 
         // Get or create default instance for comparison
-        if (!_defaultInstances.TryGetValue(type, out var defaultInstance))
+        if (!_defaultInstances.TryGetValue(objectType, out var defaultInstance))
         {
             try
             {
-                if (!type.IsAbstract && !type.IsInterface && HasDefaultConstructor(type))
+                if (!objectType.IsAbstract && !objectType.IsInterface && HasDefaultConstructor(objectType))
                 {
-                    defaultInstance = Activator.CreateInstance(type);
-                    _defaultInstances[type] = defaultInstance!;
+                    defaultInstance = Activator.CreateInstance(objectType);
+                    _defaultInstances[objectType] = defaultInstance;
                 }
             }
             catch
             {
-                // If we can't create a default instance, just pass through all properties
-                return properties;
+                // If we can't create a default instance, don't skip
+                return false;
             }
         }
 
-        if (defaultInstance == null)
+        if (defaultInstance != null)
         {
-            return properties;
+            // Get default value for this member
+            var defaultValue = member.Get(defaultInstance);
+
+            // Skip if value equals default
+            return Equals(memberValue, defaultValue);
         }
 
-        var filteredProperties = new List<IPropertyDescriptor>();
+        return false;
+    }
 
-        foreach (var property in properties)
-        {
-            // If we have a default instance, check if the property value is different
-            var defaultValue = property.Read(defaultInstance);
-            var currentValue = property.Read(container);
+    public void WriteCollectionItem(ref ObjectContext objectContext, object item, Type itemType, int index)
+    {
+        _defaultBackend.WriteCollectionItem(ref objectContext, item, itemType, index);
+    }
 
-            // Only include properties with values different from default
-            if (!Equals(currentValue.Value, defaultValue.Value))
-            {
-                filteredProperties.Add(property);
-            }
-        }
-
-        return filteredProperties;
+    public void WriteDictionaryItem(ref ObjectContext objectContext, KeyValuePair<object, object> keyValue, KeyValuePair<Type, Type> types)
+    {
+        _defaultBackend.WriteDictionaryItem(ref objectContext, keyValue, types);
     }
 
     private bool HasDefaultConstructor(Type type)
