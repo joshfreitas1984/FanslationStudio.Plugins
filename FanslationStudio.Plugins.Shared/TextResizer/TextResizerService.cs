@@ -151,34 +151,34 @@ public class TextResizerService
         // Find all TextMeshProUGUI components in the scene
         var elems = UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();
 
-    //    if (elems == null || elems.Length == 0)
-    //    {
-    //        _logger.LogWarning("No TextMeshProUGUI elements found in scene. Logging scene objects for debugging:");
-            
-    //        var allObjects = UnityEngine.Object.FindObjectsOfType<Component>();
-    //        var objectTypeGroups = new Dictionary<string, List<Component>>();
-            
-    //        foreach (var obj in allObjects)
-    //        {
-    //            var typeName = obj.GetType().FullName;
-    //            if (!objectTypeGroups.ContainsKey(typeName))
-    //                objectTypeGroups[typeName] = new List<Component>();
-                
-    //            objectTypeGroups[typeName].Add(obj);
-    //        }
-            
-    //        _logger.LogMessage($"Found {objectTypeGroups.Count} different component types in scene:");
-            
-    //        foreach (var kvp in objectTypeGroups)
-    //        {
-    //            var sample = kvp.Value[0];
-    //            var path = ObjectHelper.GetGameObjectPath(sample.gameObject);
-    //            _logger.LogMessage($"  {kvp.Key} (Count: {kvp.Value.Count}) - Sample: {path}");
-    //        }
-    //    }
+        //    if (elems == null || elems.Length == 0)
+        //    {
+        //        _logger.LogWarning("No TextMeshProUGUI elements found in scene. Logging scene objects for debugging:");
 
-    //    return elems;
-    //}
+        //        var allObjects = UnityEngine.Object.FindObjectsOfType<Component>();
+        //        var objectTypeGroups = new Dictionary<string, List<Component>>();
+
+        //        foreach (var obj in allObjects)
+        //        {
+        //            var typeName = obj.GetType().FullName;
+        //            if (!objectTypeGroups.ContainsKey(typeName))
+        //                objectTypeGroups[typeName] = new List<Component>();
+
+        //            objectTypeGroups[typeName].Add(obj);
+        //        }
+
+        //        _logger.LogMessage($"Found {objectTypeGroups.Count} different component types in scene:");
+
+        //        foreach (var kvp in objectTypeGroups)
+        //        {
+        //            var sample = kvp.Value[0];
+        //            var path = ObjectHelper.GetGameObjectPath(sample.gameObject);
+        //            _logger.LogMessage($"  {kvp.Key} (Count: {kvp.Value.Count}) - Sample: {path}");
+        //        }
+        //    }
+
+        return elems;
+    }
 
     public void AddTextElementsToResizers(TextMeshProUGUI[] textElements, bool addUnderCursor = false, bool copyUnderCursor = false)
     {
