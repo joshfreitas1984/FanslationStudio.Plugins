@@ -39,12 +39,16 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
             return;
 
         if (UnityInput.Current.GetKeyDown(_reloadHotkey))
-            _service.Reload();
-
-        if (UnityInput.Current.GetKeyDown(_addAtCursorHotKey))
-            _service.AddAtCursor(UnityInput.Current.mousePosition);
+            _service.Reload();        
 
         if (UnityInput.Current.GetKeyDown(_addAllHotKey))
             _service.AddAll();
+
+        var x = UnityInput.Current.mousePosition.x;
+        var y = UnityInput.Current.mousePosition.y;
+        var z = UnityInput.Current.mousePosition.z;
+
+        if (UnityInput.Current.GetKeyDown(_addAtCursorHotKey))
+            _service.AddAtCursor(x, y, z);
     }   
 }

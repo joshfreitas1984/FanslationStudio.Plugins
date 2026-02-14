@@ -17,7 +17,7 @@
 
   <ItemGroup>
     <PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
-    <PackageReference Include="BepInEx.Core" Version="5.*" />
+    <PackageReference Include="BepInEx.Unity.Mono" Version="6.0.0-be.753" PrivateAssets="all" />
     <PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" />
     <PackageReference Include="LitJson" Version="0.19.0" />
   </ItemGroup>
@@ -38,12 +38,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="UnityEngine">
+    <!--<Reference Include="UnityEngine">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.dll</HintPath>
-    </Reference>
-    <Reference Include="UnityEngine.CoreModule">
+    </Reference>-->
+    <!--<Reference Include="UnityEngine.CoreModule">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.CoreModule.dll</HintPath>
-    </Reference>
+    </Reference>-->
     <Reference Include="UnityEngine.UIModule">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.UIModule.dll</HintPath>
     </Reference>
@@ -63,6 +63,6 @@
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="Build">
-    <Exec Command="pwsh -ExecutionPolicy Bypass -File &quot;$(ProjectDir)postBuildScript.ps1&quot; -TargetDir &quot;$(TargetDir)&quot;" />
+    <Exec Command="pwsh -ExecutionPolicy Bypass -File &quot;$(ProjectDir)/../postBuildScript.ps1&quot; -TargetDir &quot;$(TargetDir)&quot; -$TargetVer 6" />
   </Target>
 </Project>

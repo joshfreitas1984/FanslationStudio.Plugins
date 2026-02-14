@@ -60,10 +60,10 @@ public class TextResizerService
         AddTextElementsToResizers(FindAllTextElements());
     }
 
-    public void AddResizersAtCursor(Vector3 mousePosition)
+    public void AddResizersAtCursor(float x, float y, float z)
     {
         _logger.LogWarning("Adding Resizers at Cursor");
-        AddTextElementsToResizers(FindTextElementsUnderCursor(mousePosition), addUnderCursor: true);
+        AddTextElementsToResizers(FindTextElementsUnderCursor(x, y, z), addUnderCursor: true);
     }    
 
     public void LoadResizers()
@@ -102,10 +102,10 @@ public class TextResizerService
                 Resizers.Add(newResizer.Path, newResizer);
     }
 
-    public TextMeshProUGUI[] FindTextElementsUnderCursor(Vector3 mousePosition)
+    public TextMeshProUGUI[] FindTextElementsUnderCursor(float x, float y, float z)
     {
         // Create a 10x10 pixel area around the cursor (20 pixel buffer on each side)
-        var cursorArea = new Rect(mousePosition.x - 10, mousePosition.y - 10, 20, 20);
+        var cursorArea = new Rect(x - 10, y - 10, 20, 20);
 
         // Find all TextMeshProUGUI components in the scene
         var textElements = UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();

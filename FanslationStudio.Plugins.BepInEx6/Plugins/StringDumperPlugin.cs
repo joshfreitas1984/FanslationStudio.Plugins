@@ -1,4 +1,5 @@
 ﻿using BepInEx;
+using BepInEx.Unity.Mono;
 using FanslationStudio.Plugins.DynamicStrings;
 
 namespace FanslationStudio.Plugins.Plugins;

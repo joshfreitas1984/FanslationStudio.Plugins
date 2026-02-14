@@ -49,10 +49,10 @@ public class SpriteReplacerService
         _logger.LogWarning("Sprite Contracts Reloaded");
     }
 
-    public void AddAtCursor(Vector3 mousePosition)
+    public void AddAtCursor(float x, float y, float z)
     {
         _logger.LogWarning("Adding Sprite Contracts at Cursor");
-        AddElementsToContracts(FindElementsAtCursor(mousePosition));
+        AddElementsToContracts(FindElementsAtCursor(x, y, z));
     }
 
     public void AddAll()
@@ -115,10 +115,10 @@ public class SpriteReplacerService
         return UnityEngine.Object.FindObjectsOfType<Image>();
     }
 
-    public Image[] FindElementsAtCursor(Vector3 mousePosition)
+    public Image[] FindElementsAtCursor(float x, float y, float z)
     {
         // Create a 10x10 pixel area around the cursor (20 pixel buffer on each side)
-        var cursorArea = new Rect(mousePosition.x - 10, mousePosition.y - 10, 20, 20);
+        var cursorArea = new Rect(x - 10, y - 10, 20, 20);
 
         // Find all elements in the scene
         var elements = UnityEngine.Object.FindObjectsOfType<Image>();

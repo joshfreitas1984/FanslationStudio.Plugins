@@ -1,5 +1,6 @@
 ﻿using BepInEx;
 using BepInEx.Logging;
+using BepInEx.Unity.Mono;
 using FanslationStudio.Plugins.DynamicStrings;
 using FanslationStudio.Plugins.Support;
 using HarmonyLib;

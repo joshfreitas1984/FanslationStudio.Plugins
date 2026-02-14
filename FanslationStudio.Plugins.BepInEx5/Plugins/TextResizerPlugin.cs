@@ -51,7 +51,11 @@ internal class TextResizerPlugin : BaseUnityPlugin
         if (UnityInput.Current.GetKeyDown(_addResizerHotKey))
             _service.AddResizersForScene();
 
+        var x = UnityInput.Current.mousePosition.x;
+        var y = UnityInput.Current.mousePosition.y;
+        var z = UnityInput.Current.mousePosition.z;
+
         if (UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey))
-            _service.AddResizersAtCursor(UnityInput.Current.mousePosition);
+            _service.AddResizersAtCursor(x, y, z);
     }
 }

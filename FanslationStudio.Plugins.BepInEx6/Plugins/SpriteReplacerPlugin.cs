@@ -1,8 +1,7 @@
 ﻿using BepInEx;
+using BepInEx.Unity.Mono;
 using FanslationStudio.Plugins.Sprites;
-using HarmonyLib;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace FanslationStudio.Plugins.Plugins;
 
@@ -41,10 +40,14 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
         if (UnityInput.Current.GetKeyDown(_reloadHotkey))
             _service.Reload();
 
-        if (UnityInput.Current.GetKeyDown(_addAtCursorHotKey))
-            _service.AddAtCursor(UnityInput.Current.mousePosition);
-
         if (UnityInput.Current.GetKeyDown(_addAllHotKey))
             _service.AddAll();
+
+        var x = UnityInput.Current.mousePosition.x;
+        var y = UnityInput.Current.mousePosition.y;
+        var z = UnityInput.Current.mousePosition.z;
+
+        if (UnityInput.Current.GetKeyDown(_addAtCursorHotKey))
+            _service.AddAtCursor(x, y, z);
     }   
 }

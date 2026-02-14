@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory=$true)]
-    [string]$TargetDir
+    [string]$TargetDir,
+    [Parameter(Mandatory=$true)]
+    [string]$TargetVer
 )
 
 $TargetDir = $TargetDir.TrimEnd('\', '"')
@@ -30,7 +32,12 @@ $config = Get-Content $configPath -Raw | ConvertFrom-Yaml
 
 foreach ($game in $config.games) {
     if (-not $game.export) {
-        Write-Host "Skipping: $($game.name)"
+        Write-Host "Skipping Disabled: $($game.name)"
+        continue
+    }
+
+    if ($game.Version -ne $TargetVersion) {
+        Write-Host "Skipping Version: $($game.name)"
         continue
     }
 

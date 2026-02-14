@@ -1,14 +1,6 @@
 ﻿using BepInEx;
-using BepInEx.Logging;
-using FanslationStudio.Plugins.Sprites;
-using FanslationStudio.Plugins.Support;
+using BepInEx.Unity.Mono;
 using FanslationStudio.Plugins.TextResizer;
-using HarmonyLib;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Text.RegularExpressions;
-using TMPro;
 using UnityEngine;
 
 namespace FanslationStudio.Plugins.Plugins;
@@ -51,7 +43,11 @@ internal class TextResizerPlugin : BaseUnityPlugin
         if (UnityInput.Current.GetKeyDown(_addResizerHotKey))
             _service.AddResizersForScene();
 
+        var x = UnityInput.Current.mousePosition.x;
+        var y = UnityInput.Current.mousePosition.y;
+        var z = UnityInput.Current.mousePosition.z;
+
         if (UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey))
-            _service.AddResizersAtCursor(UnityInput.Current.mousePosition);
+            _service.AddResizersAtCursor(x, y, z);
     }
 }
