@@ -6,7 +6,7 @@ using UnityEngine;
 namespace FanslationStudio.Plugins.Plugins;
 
 [BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.TextResizer", "TextResizer", MyPluginInfo.PLUGIN_VERSION)]
-internal class TextResizerPlugin : BaseUnityPlugin
+public class TextResizerPlugin : BaseUnityPlugin
 {
     private static IPluginLogger _logger;
     private static TextResizerService _service;

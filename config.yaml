@@ -11,7 +11,7 @@ games:
     managedPath: '\WXQXZ_Data\Managed'
     pluginPath: '\BepInEx\plugins'
     releasePath: '\ReleaseFolder\Files'
-    export: false
+    export: true
     version: 5
   - name: "NextStopJianghu2"
     gamePath: 'G:\SteamLibrary\steamapps\common\下一站江湖Ⅱ\下一站江湖Ⅱ'

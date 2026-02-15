@@ -49,7 +49,7 @@ foreach ($game in $config.games) {
     New-Item -ItemType Directory -Path $pluginPath, $releasePath -Force | Out-Null
     Copy-Item -Path $pluginDll -Destination $pluginPath -Force
     Copy-Item -Path $pluginDll -Destination $releasePath -Force
-    Write-Host "  Plugin DLL copied to plugin and release paths"
+    Write-Host "  Plugin DLL ($TargetVer) copied to plugin and release paths"
 }
 
 Write-Host "Post-build deploy completed"
