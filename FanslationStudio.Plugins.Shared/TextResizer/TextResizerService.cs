@@ -7,6 +7,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using TMPro;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 namespace FanslationStudio.Plugins.TextResizer;
@@ -52,6 +53,10 @@ public class TextResizerService
             Directory.CreateDirectory(_resizerFolder);
 
         LoadResizers();
+
+        // Subscribe to scene loaded event to reapply resizers when scenes change
+        SceneManager.sceneLoaded += OnSceneLoaded;
+
         _logger.LogWarning($"TextResizer Plugin Loaded!");
     }
 
@@ -61,6 +66,15 @@ public class TextResizerService
         LoadResizers();
         ApplyAllResizers();
         _logger.LogWarning("Resizers Reloaded");
+    }
+
+    private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        if (!ResizersLoaded)
+            return;
+
+        _logger.LogMessage($"Scene loaded: {scene.name}, reapplying all resizers");
+        ApplyAllResizers();
     }
 
     public void AddResizersForScene()
@@ -835,5 +849,24 @@ public class TextResizerService
             return;
 
         ApplyResizingToLegacyText(__instance);
+    }
+
+    [HarmonyPostfix, HarmonyPatch(typeof(CanvasGroup), "alpha", MethodType.Setter)]
+    public static void Postfix_CanvasGroup_SetAlpha(CanvasGroup __instance, float value)
+    {
+        if (!ResizersLoaded)
+            return;
+
+        // Only apply when canvas is being made visible (alpha going above 0)
+        if (value > 0)
+        {
+            var tmpItems = __instance.GetComponentsInChildren<TextMeshProUGUI>(false);
+            foreach (var item in tmpItems)
+                ApplyResizing(item);
+
+            var textItems = __instance.GetComponentsInChildren<Text>(false);
+            foreach (var item in textItems)
+                ApplyResizingToLegacyText(item);
+        }
     }
 }
