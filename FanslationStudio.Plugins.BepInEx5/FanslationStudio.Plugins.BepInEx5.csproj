@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
@@ -19,7 +19,14 @@
     <PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
     <PackageReference Include="BepInEx.Core" Version="5.*" />
     <PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" />
+    <PackageReference Include="YamlDotNet" Version="16.0.0" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FanslationStudio.Plugins.Shared\FanslationStudio.Plugins.Shared.csproj" />
+    <ProjectReference Include="..\FanslationStudio.Plugins.YamlDotNet\FanslationStudio.Plugins.YamlDotNet.csproj" />
+  </ItemGroup>
+
   <ItemGroup Condition="'$(TargetFramework.TrimEnd(`0123456789`))' == 'net'">
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.2" PrivateAssets="all" />
   </ItemGroup>
@@ -54,11 +61,7 @@
     <Reference Include="UnityEngine.UI">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.UI.dll</HintPath>
     </Reference>
-  </ItemGroup>
-  
-  <ItemGroup>
-    <ProjectReference Include="..\FanslationStudio.Plugins.Shared\FanslationStudio.Plugins.Shared.csproj" />
-  </ItemGroup>
+  </ItemGroup> 
 
   <Target Name="PostBuild" AfterTargets="Build">
     <Exec Command="pwsh -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\postBuildScript.ps1&quot; -TargetVer 5 -TargetDir &quot;$(TargetDir)&quot;" />

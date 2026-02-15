@@ -2,6 +2,7 @@
 using BepInEx.Logging;
 using BepInEx.Unity.Mono;
 using FanslationStudio.Plugins.DynamicStrings;
+using FanslationStudio.Plugins.SharpYaml;
 using FanslationStudio.Plugins.Support;
 using HarmonyLib;
 using System;
@@ -32,7 +33,8 @@ public class StringPatcherPlugin : BaseUnityPlugin
         StringPatcherService = new StringPatcherService(new BepInEx6Logger(base.Logger), 
             _enabled,
             new Harmony($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher"),
-            Paths.BepInExRootPath);
+            Paths.BepInExRootPath,
+            new YamlHelper());
 
         StringPatcherService.Awake();
     }

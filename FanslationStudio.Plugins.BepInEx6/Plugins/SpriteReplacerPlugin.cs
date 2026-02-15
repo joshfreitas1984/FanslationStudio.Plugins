@@ -1,5 +1,7 @@
 ﻿using BepInEx;
 using BepInEx.Unity.Mono;
+using FanslationStudio.Plugins.Shared;
+using FanslationStudio.Plugins.SharpYaml;
 using FanslationStudio.Plugins.Sprites;
 using UnityEngine;
 
@@ -27,7 +29,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
 
         _logger = new BepInEx6Logger(base.Logger);
         _service = new SpriteReplacerService(
-            _logger, _enabled, Paths.BepInExRootPath);
+            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper());
 
         _service.Awake();
     }

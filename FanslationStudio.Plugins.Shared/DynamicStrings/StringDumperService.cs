@@ -1,4 +1,4 @@
-﻿using FanslationStudio.Plugins.Support;
+﻿using FanslationStudio.Plugins.Shared;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using System;
@@ -20,7 +20,8 @@ public class StringDumperService
     public static string DumpFilePath;
     public static string ManagedPath;
 
-    public StringDumperService(IPluginLogger logger, string dumpFilePath, string regexPattern, bool enabled, string managedPath)
+    public StringDumperService(IPluginLogger logger, 
+        string dumpFilePath, string regexPattern, bool enabled, string managedPath)
     {
         Logger = logger;
         DumpFilePath = dumpFilePath;
@@ -41,8 +42,6 @@ public class StringDumperService
 
         try
         {
-            //!!! Manually copy YamlDotNet.dll to the ManagedDlls folder
-            var serializer = Yaml.CreateSerializer();
             string gamePath = ManagedPath;
             string assemblyPath = Path.Combine(gamePath, "Assembly-CSharp.dll");
 
@@ -58,10 +57,7 @@ public class StringDumperService
                     ProcessType(type, contracts);
                     count++;
                 }
-            }
-
-            //YAML is too hard to handle when splitting
-            //File.WriteAllText(outputPath, serializer.Serialize(contracts));
+            }            
 
             var lines = new List<string>();
             foreach (var contract in contracts)

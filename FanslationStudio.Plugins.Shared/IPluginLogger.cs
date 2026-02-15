@@ -1,4 +1,4 @@
-﻿namespace FanslationStudio.Plugins;
+﻿namespace FanslationStudio.Plugins.Shared;
 
 public interface IPluginLogger
 {

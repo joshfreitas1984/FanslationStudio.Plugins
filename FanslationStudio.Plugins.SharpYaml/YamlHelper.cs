@@ -1,18 +1,19 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using FanslationStudio.Plugins.Support;
 using SharpYaml;
 using SharpYaml.Serialization;
-using SharpYaml.Serialization.Descriptors;
 using SharpYaml.Serialization.Serializers;
+using System;
+using System.Collections.Generic;
 
-namespace FanslationStudio.Plugins.Support;
+namespace FanslationStudio.Plugins.SharpYaml;
 
 /// <summary>
 /// Provides factory methods for creating YAML serializers with custom settings.
 /// </summary>
-public class Yaml
+public class YamlHelper: IYamlHelper
 {
+    public static Serializer Serializer = CreateSerializer();
+
     /// <summary>
     /// Creates a serializer for writing objects to YAML format.
     /// Excludes members with default values and uses camelCase naming.
@@ -32,19 +33,14 @@ public class Yaml
         return new Serializer(settings);
     }
 
-    /// <summary>
-    /// Creates a serializer for reading YAML format into objects.
-    /// Uses camelCase naming convention.
-    /// </summary>
-    public static Serializer CreateDeserializer()
+    public string Serialize(object obj)
     {
-        var settings = new SerializerSettings
-        {
-            NamingConvention = new CamelCaseNamingConvention(),
-            EmitTags = false
-        };
+        return Serializer.Serialize(obj);
+    }
 
-        return new Serializer(settings);
+    public T Deserialize<T>(string yaml)
+    {
+        return Serializer.Deserialize<T>(yaml);
     }
 }
 

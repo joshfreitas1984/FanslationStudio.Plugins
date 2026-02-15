@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FanslationStudio.Plugins.Shared\FanslationStudio.Plugins.Shared.csproj" />
+    <ProjectReference Include="..\FanslationStudio.Plugins.SharpYaml\FanslationStudio.Plugins.SharpYaml.csproj" />
   </ItemGroup>
 
   <ItemGroup>

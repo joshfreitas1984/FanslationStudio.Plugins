@@ -1,6 +1,5 @@
 ﻿using BepInEx.Logging;
-using FanslationStudio.Plugins;
-using UnityEngine;
+using FanslationStudio.Plugins.Shared;
 
 public class BepInEx6Logger : IPluginLogger
 {

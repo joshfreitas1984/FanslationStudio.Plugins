@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
@@ -19,6 +19,11 @@
     <PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
     <PackageReference Include="BepInEx.Unity.Mono" Version="6.0.0-be.753" PrivateAssets="all" />
     <PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FanslationStudio.Plugins.Shared\FanslationStudio.Plugins.Shared.csproj" />
+    <ProjectReference Include="..\FanslationStudio.Plugins.SharpYaml\FanslationStudio.Plugins.SharpYaml.csproj" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework.TrimEnd(`0123456789`))' == 'net'">
@@ -55,10 +60,6 @@
     <Reference Include="UnityEngine.UI">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.UI.dll</HintPath>
     </Reference>
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\FanslationStudio.Plugins.Shared\FanslationStudio.Plugins.Shared.csproj" />
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="Build">

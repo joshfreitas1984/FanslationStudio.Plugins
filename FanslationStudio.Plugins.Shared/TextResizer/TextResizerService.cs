@@ -1,6 +1,6 @@
-﻿using FanslationStudio.Plugins.Support;
+﻿using FanslationStudio.Plugins.Shared;
+using FanslationStudio.Plugins.Support;
 using HarmonyLib;
-using HarmonyLib.Tools;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -30,12 +30,14 @@ public class TextResizerService
     // Flag to prevent recursion in text setter patches
     private static bool _isApplyingResizer = false;
 
+    private static IYamlHelper _yamlHelper;
 
-    public TextResizerService(IPluginLogger logger, bool enabled, string bepinexRootPath)
+    public TextResizerService(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper)
     {
         _logger = logger;
         _enabled = enabled;
         _resizerFolder = Path.Combine(bepinexRootPath, "resizers");
+        _yamlHelper = yamlHelper;
     }
 
     public void Awake()
@@ -82,8 +84,7 @@ public class TextResizerService
     public void LoadResizers()
     {
         ResizersLoaded = false;
-
-        var deserializer = Yaml.CreateDeserializer();
+        
         Resizers.Clear();
         CachedMatchedResizers.Clear();
         CompiledRegexCache.Clear();
@@ -97,7 +98,7 @@ public class TextResizerService
                 if (string.IsNullOrWhiteSpace(content))
                     continue;
 
-                var newResizers = deserializer.Deserialize<List<TextResizerContract>>(content);
+                var newResizers = _yamlHelper.Deserialize<List<TextResizerContract>>(content);
                 AddFoundResizers(newResizers);
             }
             catch (Exception ex)
@@ -276,10 +277,8 @@ public class TextResizerService
 
         if (foundResizers.Count > 0)
         {
-            var serializer = Yaml.CreateSerializer();
-
             var addedResizersFile = $"{_resizerFolder}/zzAddedResizers.yaml";
-            var newText = serializer.Serialize(foundResizers);
+            var newText = _yamlHelper.Serialize(foundResizers);
 
             _logger.LogWarning($"Writing to {addedResizersFile}");
 
@@ -322,11 +321,9 @@ public class TextResizerService
         }
 
         if (foundResizers.Count > 0)
-        {
-            var serializer = Yaml.CreateSerializer();
-
+        {            
             var addedResizersFile = $"{_resizerFolder}/zzAddedResizers.yaml";
-            var newText = serializer.Serialize(foundResizers);
+            var newText = _yamlHelper.Serialize(foundResizers);
 
             _logger.LogWarning($"Writing to {addedResizersFile}");
 

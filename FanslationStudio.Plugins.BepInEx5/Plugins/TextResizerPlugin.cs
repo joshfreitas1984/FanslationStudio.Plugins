@@ -1,8 +1,10 @@
 ﻿using BepInEx;
 using BepInEx.Logging;
+using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.Sprites;
 using FanslationStudio.Plugins.Support;
 using FanslationStudio.Plugins.TextResizer;
+using FanslationStudio.Plugins.YamlDotNet;
 using HarmonyLib;
 using System;
 using System.Collections.Generic;
@@ -13,11 +15,23 @@ using UnityEngine;
 
 namespace FanslationStudio.Plugins.Plugins;
 
+
+// We need to wrap any services we want to use in the plugin itself,
+// because BepInEx doesn't allow us to use typed references to the service in the plugin,
+// and we don't want to use reflection everywhere.
+public class TextResizerServiceWrapper : TextResizerService
+{
+    public TextResizerServiceWrapper(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper)
+        : base(logger, enabled, bepinexRootPath, yamlHelper)
+    {
+    }
+}
+
 [BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.TextResizer", "TextResizer", MyPluginInfo.PLUGIN_VERSION)]
 internal class TextResizerPlugin : BaseUnityPlugin
 {
-    private static IPluginLogger _logger;
-    private static TextResizerService _service;
+    // Cannot use typed references b
+    private static TextResizerServiceWrapper _service;
     private static bool _enabled = true;
 
     private KeyCode _addResizerAtCursorHotKey = KeyCode.KeypadMinus;
@@ -34,9 +48,9 @@ internal class TextResizerPlugin : BaseUnityPlugin
         if (!_enabled)
             return;
 
-        _logger = new BepInEx5Logger(base.Logger);
-        _service = new TextResizerService(
-            _logger, _enabled, Paths.BepInExRootPath);
+        _service = new TextResizerServiceWrapper(
+             new BepInEx5Logger(Logger),
+             _enabled, Paths.BepInExRootPath, new YamlHelper());
         _service.Awake();
     }
 

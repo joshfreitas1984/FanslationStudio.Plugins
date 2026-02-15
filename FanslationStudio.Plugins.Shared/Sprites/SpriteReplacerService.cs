@@ -1,4 +1,5 @@
-﻿using FanslationStudio.Plugins.Support;
+﻿using FanslationStudio.Plugins.Shared;
+using FanslationStudio.Plugins.Support;
 using HarmonyLib;
 using System;
 using System.Collections.Generic;
@@ -20,10 +21,13 @@ public class SpriteReplacerService
     public static Dictionary<string, SpriteReplacerContract> CachedMatchesContracts = [];
     private static string _folder;
 
-    public SpriteReplacerService(IPluginLogger logger, bool enabled, string bepinexRootPath)
+    private static IYamlHelper _yamlHelper;
+
+    public SpriteReplacerService(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper)
     {
         _logger = logger;
         _enabled = enabled;
+        _yamlHelper = yamlHelper;
         _folder = Path.Combine(bepinexRootPath, "sprites2");
     }
 
@@ -71,7 +75,6 @@ public class SpriteReplacerService
     {
         ContractsLoaded = false;
 
-        var deserializer = Yaml.CreateDeserializer();
         Contracts.Clear();
         CachedMatchesContracts.Clear();
 
@@ -84,7 +87,7 @@ public class SpriteReplacerService
                 if (string.IsNullOrWhiteSpace(content))
                     continue;
 
-                var newContracts = deserializer.Deserialize<List<SpriteReplacerContract>>(content);
+                var newContracts = _yamlHelper.Deserialize<List<SpriteReplacerContract>>(content);
                 AddFoundContracts(newContracts);
             }
             catch (Exception ex)
@@ -232,11 +235,9 @@ public class SpriteReplacerService
         }
 
         if (foundContracts.Count > 0)
-        {
-            var serializer = Yaml.CreateSerializer();
-
+        {            
             var addedContractsFile = $"{_folder}/zzAdded.yaml";
-            var newText = serializer.Serialize(foundContracts);
+            var newText = _yamlHelper.Serialize(foundContracts);
 
             _logger.LogWarning($"Writing to {addedContractsFile}");
 

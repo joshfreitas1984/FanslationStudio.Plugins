@@ -1,4 +1,5 @@
-﻿using FanslationStudio.Plugins.Support;
+﻿using FanslationStudio.Plugins.Shared;
+using FanslationStudio.Plugins.Support;
 using HarmonyLib;
 using System;
 using System.Collections;
@@ -20,13 +21,16 @@ public class StringPatcherService
     private static bool _enabled = false;
     private Harmony _harmony;
     private string _bepinExRootPath;
+    private static IYamlHelper _yamlHelper;
 
-    public StringPatcherService(IPluginLogger logger, bool enabled, Harmony harmony, string bepinExRootPath)
+    public StringPatcherService(IPluginLogger logger, bool enabled, 
+        Harmony harmony, string bepinExRootPath, IYamlHelper yamlHelper)
     {
         Logger = logger;
         _enabled = enabled;
         _harmony = harmony;
         _bepinExRootPath = bepinExRootPath;
+        _yamlHelper = yamlHelper;
     }
 
     public void Awake()
@@ -79,10 +83,9 @@ public class StringPatcherService
         Logger.LogMessage($"Loading translations from: {filePath}");
 
         var badContractErrors = new List<string>();
-
-        var deserializer = Yaml.CreateDeserializer();
+        
         var lines = File.ReadAllText(filePath);
-        var contracts = deserializer.Deserialize<List<DynamicStringContract>>(lines);
+        var contracts = _yamlHelper.Deserialize<List<DynamicStringContract>>(lines);
 
         // This is bad because on overloaded functions the addresses will be different
         // we need to match the addresses and the method before grouping

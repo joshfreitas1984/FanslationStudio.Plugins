@@ -1,4 +1,5 @@
-﻿using FanslationStudio.Plugins.Support;
+﻿using FanslationStudio.Plugins.SharpYaml;
+using FanslationStudio.Plugins.Support;
 using FanslationStudio.Plugins.TextResizer;
 
 namespace FanslationStudio.Plugins.Tests
@@ -10,14 +11,14 @@ namespace FanslationStudio.Plugins.Tests
         [Fact]
         public void ReserializeResizerTest()
         {
-            var serializer = Yaml.CreateSerializer();
-            var deserializer = Yaml.CreateDeserializer();
+            var helper = new YamlHelper();
+
             var folder = $"{workingDirectory}/Resizers";
 
             foreach (var file in Directory.EnumerateFiles(folder))
             {
-                var newResizers = deserializer.Deserialize<List<TextResizerContract>>(File.ReadAllText(file));
-                var content = serializer.Serialize(newResizers);
+                var newResizers = helper.Deserialize<List<TextResizerContract>>(File.ReadAllText(file));
+                var content = helper.Serialize(newResizers);
                 File.WriteAllText(file, content);
             }
         }

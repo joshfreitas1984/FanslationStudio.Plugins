@@ -4,6 +4,7 @@
     <IncludeAssemblies>
       SharpYaml
       FanslationStudio.Plugins.Shared
+      FanslationStudio.Plugins.SharpYaml
     </IncludeAssemblies>
   </Costura>
 </Weavers>
