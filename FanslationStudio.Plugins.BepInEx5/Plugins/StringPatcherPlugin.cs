@@ -20,8 +20,8 @@ namespace FanslationStudio.Plugins.Plugins;
 // and we don't want to use reflection everywhere.
 public class StringPatcherServiceWrapper : StringPatcherService
 {
-    public StringPatcherServiceWrapper(IPluginLogger logger, bool enabled, Harmony harmony, string bepinExRootPath, IYamlHelper yamlHelper)
-        : base(logger, enabled, harmony, bepinExRootPath, yamlHelper)
+    public StringPatcherServiceWrapper(IPluginLogger logger, bool enabled, Harmony harmony, string resourcePath, string bepinExRootPath, IYamlHelper yamlHelper)
+        : base(logger, enabled, harmony, resourcePath, bepinExRootPath, yamlHelper)
     {
     }
 }
@@ -41,10 +41,13 @@ public class StringPatcherPlugin : BaseUnityPlugin
             "Enabled",
             false,
             "Turn plugin to replace dyanmic strings that are hardcoded in code").Value;
+        var resourcePath = Config.Bind("General", "ResourcePath", "./english",
+            "File to dump the dynamic strings to").Value;
 
         StringPatcherService = new StringPatcherServiceWrapper(new BepInEx5Logger(base.Logger),
             _enabled,
             new Harmony($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher"),
+            resourcePath,
             Paths.BepInExRootPath,
             new YamlHelper());
 

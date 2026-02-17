@@ -19,15 +19,17 @@ public class StringDumperService
     public static string RegexPattern;
     public static string DumpFilePath;
     public static string ManagedPath;
+    private readonly string BepinExPath;
 
     public StringDumperService(IPluginLogger logger, 
-        string dumpFilePath, string regexPattern, bool enabled, string managedPath)
+        string dumpFilePath, string regexPattern, bool enabled, string managedPath, string bepinExPath)
     {
         Logger = logger;
         DumpFilePath = dumpFilePath;
         RegexPattern = regexPattern;
         Enabled = enabled;
         ManagedPath = managedPath;
+        BepinExPath = bepinExPath;
     }
 
     public void Awake()
@@ -42,6 +44,7 @@ public class StringDumperService
 
         try
         {
+            outputPath = Path.Combine(BepinExPath, outputPath);
             string gamePath = ManagedPath;
             string assemblyPath = Path.Combine(gamePath, "Assembly-CSharp.dll");
 
@@ -66,7 +69,7 @@ public class StringDumperService
                 lines.Add($"{CleanForCsv(contract.Type)},{CleanForCsv(contract.Method)},{CleanForCsv(contract.ILOffset.ToString())},{CleanForCsv(contract.Raw)},{parameters}");
             }
 
-            File.WriteAllLines(outputPath, lines);
+            File.WriteAllLines($"{outputPath}/dynamicStrings.txt", lines);
             Logger.LogWarning($"Dumped to: {outputPath}");
         }
         catch (Exception ex)

@@ -36,6 +36,9 @@
     <Reference Include="UnityEngine.TextRenderingModule">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.TextRenderingModule.dll</HintPath>
     </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.AssetBundleModule.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>

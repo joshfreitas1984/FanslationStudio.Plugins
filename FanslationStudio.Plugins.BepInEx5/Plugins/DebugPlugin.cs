@@ -7,6 +7,6 @@ internal class DebugPlugin : BaseUnityPlugin
 {
     private void Awake()
     {
-        Logger.LogError("Debugging Yo");
+        Logger.LogInfo("Without this log plugins don't load");
     }
 }

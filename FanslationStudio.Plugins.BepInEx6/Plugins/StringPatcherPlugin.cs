@@ -30,9 +30,13 @@ public class StringPatcherPlugin : BaseUnityPlugin
             false,
             "Turn plugin to replace dyanmic strings that are hardcoded in code").Value;
 
+        var resourcePath = Config.Bind("General", "ResourcePath", "./english",
+            "File to dump the dynamic strings to").Value;
+
         StringPatcherService = new StringPatcherService(new BepInEx6Logger(base.Logger), 
             _enabled,
             new Harmony($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher"),
+            resourcePath,
             Paths.BepInExRootPath,
             new YamlHelper());
 

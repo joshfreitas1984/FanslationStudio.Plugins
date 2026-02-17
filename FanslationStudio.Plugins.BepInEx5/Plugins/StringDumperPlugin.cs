@@ -10,8 +10,8 @@ namespace FanslationStudio.Plugins.Plugins;
 // and we don't want to use reflection everywhere.
 public class StringDumperServiceWrapper : StringDumperService
 {
-    public StringDumperServiceWrapper(IPluginLogger logger, string dumpFilePath, string regexPattern, bool enabled, string managedPath)
-        : base(logger, dumpFilePath, regexPattern, enabled, managedPath)
+    public StringDumperServiceWrapper(IPluginLogger logger, string dumpFilePath, string regexPattern, bool enabled, string managedPath, string bepinExPath)
+        : base(logger, dumpFilePath, regexPattern, enabled, managedPath, bepinExPath)
     {
     }
 }
@@ -30,10 +30,11 @@ public class StringDumperPlugin : BaseUnityPlugin
             "Enable dynamic string dumping on startup").Value;
         var regexPattern = Config.Bind("General", "ForeignLanguagePattern", DynamicStringSupport.ChineseCharPattern,
             "Regex pattern for foreign language to scan for").Value;
-        var dumpFiles = Config.Bind("General", "DumpFilePath", ".",
+        var dumpFiles = Config.Bind("General", "DumpFilePath", "./dumpeddata",
             "File to dump the dynamic strings to").Value;
 
-        StringDumper = new StringDumperServiceWrapper(new BepInEx5Logger(base.Logger), dumpFiles, regexPattern, enabled, Paths.ManagedPath);
+        StringDumper = new StringDumperServiceWrapper(new BepInEx5Logger(base.Logger), dumpFiles, regexPattern, enabled, 
+            Paths.ManagedPath, Paths.BepInExRootPath);
         StringDumper.Awake();
     }
 }

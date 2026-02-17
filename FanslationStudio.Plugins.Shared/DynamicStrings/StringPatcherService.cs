@@ -21,14 +21,16 @@ public class StringPatcherService
     private static bool _enabled = false;
     private Harmony _harmony;
     private string _bepinExRootPath;
+    private string _resourcePath;
     private static IYamlHelper _yamlHelper;
 
     public StringPatcherService(IPluginLogger logger, bool enabled, 
-        Harmony harmony, string bepinExRootPath, IYamlHelper yamlHelper)
+        Harmony harmony, string resourcePath, string bepinExRootPath, IYamlHelper yamlHelper)
     {
         Logger = logger;
         _enabled = enabled;
         _harmony = harmony;
+        _resourcePath = resourcePath;
         _bepinExRootPath = bepinExRootPath;
         _yamlHelper = yamlHelper;
     }
@@ -41,7 +43,7 @@ public class StringPatcherService
         Logger.LogMessage("Dynamic String Patcher loading...");
 
         // Load translations from CSV
-        var resourcePath = Path.Combine(_bepinExRootPath, "resources");
+        var resourcePath = Path.Combine(_bepinExRootPath, _resourcePath);
         var filePath = Path.Combine(resourcePath, "dynamicStrings.txt");
 
         if (File.Exists(filePath))

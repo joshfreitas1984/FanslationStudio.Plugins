@@ -21,7 +21,8 @@ public class StringDumperPlugin : BaseUnityPlugin
         var dumpFiles = Config.Bind("General", "DumpFilePath", ".",
             "File to dump the dynamic strings to").Value;
 
-        StringDumper = new StringDumperService(new BepInEx6Logger(base.Logger), dumpFiles, regexPattern, enabled, Paths.ManagedPath);
+        StringDumper = new StringDumperService(new BepInEx6Logger(base.Logger), dumpFiles, regexPattern, enabled, 
+            Paths.ManagedPath, Paths.BepInExRootPath);
         StringDumper.Awake();
     }    
 }
