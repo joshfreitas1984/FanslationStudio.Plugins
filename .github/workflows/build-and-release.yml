@@ -58,13 +58,11 @@ jobs:
           $bep5Dir = "./release/bepinex5"
           New-Item -ItemType Directory -Path $bep5Dir -Force | Out-Null
           Copy-Item "FanslationStudio.Plugins.BepInEx5/bin/Release/netstandard2.1/FanslationStudio.Plugins.dll" "$bep5Dir/FanslationStudio.Plugins.BepInEx5.dll"
-          Copy-Item "FanslationStudio.Plugins.BepInEx5/bin/Release/netstandard2.1/FanslationStudio.Plugins.Shared.dll" "$bep5Dir/"
           Compress-Archive -Path "$bep5Dir/*" -DestinationPath "./release/FanslationStudio.Plugins.BepInEx5.zip"
 
           $bep6Dir = "./release/bepinex6"
           New-Item -ItemType Directory -Path $bep6Dir -Force | Out-Null
           Copy-Item "FanslationStudio.Plugins.BepInEx6/bin/Release/netstandard2.1/FanslationStudio.Plugins.dll" "$bep6Dir/FanslationStudio.Plugins.BepInEx6.dll"
-          Copy-Item "FanslationStudio.Plugins.BepInEx6/bin/Release/netstandard2.1/FanslationStudio.Plugins.Shared.dll" "$bep6Dir/"
           Compress-Archive -Path "$bep6Dir/*" -DestinationPath "./release/FanslationStudio.Plugins.BepInEx6.zip"
 
       - name: Create git tag
