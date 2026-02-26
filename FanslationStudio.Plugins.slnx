@@ -1,6 +1,13 @@
 <Solution>
   <Folder Name="/Solution Items/">
+    <File Path="config.yaml" />
+    <File Path="postBuildScript.ps1" />
     <File Path="readme.md" />
   </Folder>
-  <Project Path="FanslationStudio.Plugins/FanslationStudio.Plugins.csproj" />
+  <Project Path="FanslationStudio.Plugins.BepInEx5/FanslationStudio.Plugins.BepInEx5.csproj" />
+  <Project Path="FanslationStudio.Plugins.BepInEx6/FanslationStudio.Plugins.BepInEx6.csproj" />
+  <Project Path="FanslationStudio.Plugins.Shared/FanslationStudio.Plugins.Shared.csproj" />
+  <Project Path="FanslationStudio.Plugins.SharpYaml/FanslationStudio.Plugins.SharpYaml.csproj" Id="ddccd026-d6ec-4ea0-8397-40d065bbd3a9" />
+  <Project Path="FanslationStudio.Plugins.Tests/FanslationStudio.Plugins.Tests.csproj" Id="e3ad1c5e-e4c3-4b74-b3e4-d05777967775" />
+  <Project Path="FanslationStudio.Plugins.YamlDotNet/FanslationStudio.Plugins.YamlDotNet.csproj" Id="e7f46e01-1f95-4713-aaa0-b747232093a6" />
 </Solution>

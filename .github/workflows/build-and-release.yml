@@ -1,0 +1,81 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate version tag
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Date -AsUTC -Format "yyyy.MM.dd.HH.mm")
+          "VERSION=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Restore packages
+        run: dotnet restore
+
+      - name: Build solution
+        run: dotnet build --configuration Release --no-restore -p:Version=${{ steps.version.outputs.VERSION }}
+
+      - name: Pack NuGet - Shared
+        run: dotnet pack FanslationStudio.Plugins.Shared/FanslationStudio.Plugins.Shared.csproj --configuration Release --no-build -p:Version=${{ steps.version.outputs.VERSION }} --output ./nuget
+
+      - name: Pack NuGet - BepInEx5
+        run: dotnet pack FanslationStudio.Plugins.BepInEx5/FanslationStudio.Plugins.BepInEx5.csproj --configuration Release --no-build -p:Version=${{ steps.version.outputs.VERSION }} --output ./nuget
+
+      - name: Pack NuGet - BepInEx6
+        run: dotnet pack FanslationStudio.Plugins.BepInEx6/FanslationStudio.Plugins.BepInEx6.csproj --configuration Release --no-build -p:Version=${{ steps.version.outputs.VERSION }} --output ./nuget
+
+      - name: Push NuGet packages
+        run: dotnet nuget push "./nuget/*.nupkg" --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGETKEY }} --skip-duplicate
+
+      - name: Prepare release artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path ./release -Force | Out-Null
+
+          $bep5Dir = "./release/bepinex5"
+          New-Item -ItemType Directory -Path $bep5Dir -Force | Out-Null
+          Copy-Item "FanslationStudio.Plugins.BepInEx5/bin/Release/netstandard2.1/FanslationStudio.Plugins.dll" "$bep5Dir/FanslationStudio.Plugins.BepInEx5.dll"
+          Copy-Item "FanslationStudio.Plugins.BepInEx5/bin/Release/netstandard2.1/FanslationStudio.Plugins.Shared.dll" "$bep5Dir/"
+          Compress-Archive -Path "$bep5Dir/*" -DestinationPath "./release/FanslationStudio.Plugins.BepInEx5.zip"
+
+          $bep6Dir = "./release/bepinex6"
+          New-Item -ItemType Directory -Path $bep6Dir -Force | Out-Null
+          Copy-Item "FanslationStudio.Plugins.BepInEx6/bin/Release/netstandard2.1/FanslationStudio.Plugins.dll" "$bep6Dir/FanslationStudio.Plugins.BepInEx6.dll"
+          Copy-Item "FanslationStudio.Plugins.BepInEx6/bin/Release/netstandard2.1/FanslationStudio.Plugins.Shared.dll" "$bep6Dir/"
+          Compress-Archive -Path "$bep6Dir/*" -DestinationPath "./release/FanslationStudio.Plugins.BepInEx6.zip"
+
+      - name: Create git tag
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.version.outputs.VERSION }}
+          git push origin ${{ steps.version.outputs.VERSION }}
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Release ${{ steps.version.outputs.VERSION }}
+          files: |
+            release/FanslationStudio.Plugins.BepInEx5.zip
+            release/FanslationStudio.Plugins.BepInEx6.zip
