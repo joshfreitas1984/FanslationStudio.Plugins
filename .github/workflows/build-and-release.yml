@@ -44,7 +44,11 @@ jobs:
         run: dotnet pack FanslationStudio.Plugins.BepInEx6/FanslationStudio.Plugins.BepInEx6.csproj --configuration Release --no-build -p:Version=${{ steps.version.outputs.VERSION }} --output ./nuget
 
       - name: Push NuGet packages
-        run: dotnet nuget push "./nuget/*.nupkg" --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGETKEY }} --skip-duplicate
+        shell: pwsh
+        run: |
+          Get-ChildItem "./nuget/*.nupkg" | ForEach-Object {
+            dotnet nuget push $_.FullName --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGETKEY }} --skip-duplicate
+          }
 
       - name: Prepare release artifacts
         shell: pwsh
