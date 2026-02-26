@@ -3,6 +3,10 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>FanslationStudio.Plugins.Shared</AssemblyName>
+    <PackageId>FanslationStudio.Plugins.Shared</PackageId>
+    <Authors>joshfreitas1984</Authors>
+    <Description>Shared code for Fanslation Studio Plugins</Description>
+    <RepositoryUrl>https://github.com/joshfreitas1984/FanslationStudio.Plugins</RepositoryUrl>
     <Product>Shared code for Fanslation Studio Plugins</Product>
     <Version>1.0.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
