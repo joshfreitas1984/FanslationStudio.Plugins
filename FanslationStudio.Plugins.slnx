@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/Solution Items/">
+    <File Path=".github/copilot-instructions.md" />
     <File Path=".github/workflows/build-and-release.yml" />
     <File Path="config.yaml" />
     <File Path="postBuildScript.ps1" />
