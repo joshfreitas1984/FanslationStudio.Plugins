@@ -4,8 +4,15 @@ games:
     managedPath: '\Mortal_Data\Managed'
     pluginPath: '\BepInEx\plugins'
     releasePath: '\ReleaseFolder\Files'
-    export: true
+    export: false
     version: 6
+  - name: "LegendOfDragonHeir"
+    gamePath: 'G:\SteamLibrary\steamapps\common\LongYinLiZhiZhuan'
+    managedPath: '\BepInEx\plugins'
+    pluginPath: '\BepInEx\plugins'
+    releasePath: '\ReleaseFolder\Files'
+    export: true
+    version: 6.IL2CPP
   - name: "Wanxiang"
     gamePath: 'C:\Program Files (x86)\Steam\steamapps\common\wanxiang\wanxiang' 
     managedPath: '\WXQXZ_Data\Managed'

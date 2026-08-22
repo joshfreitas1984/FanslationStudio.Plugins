@@ -56,6 +56,9 @@
     <Reference Include="UnityEngine.UIModule">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.UIModule.dll</HintPath>
     </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.TextRenderingModule.dll</HintPath>
+    </Reference>
     <Reference Include="UnityEngine.ImageConversionModule">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.ImageConversionModule.dll</HintPath>
     </Reference>

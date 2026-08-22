@@ -23,32 +23,58 @@ public class SpriteReplacerService
 
     private static IYamlHelper _yamlHelper;
 
-    public SpriteReplacerService(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper)
+    // Host-runtime-specific finder for Image components. See ISpriteElementFinder for why this
+    // can't be a direct FindObjectsOfType<T>() call from Shared.
+    private static ISpriteElementFinder _elementFinder;
+
+    public SpriteReplacerService(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper, ISpriteElementFinder elementFinder)
     {
         _logger = logger;
         _enabled = enabled;
         _yamlHelper = yamlHelper;
+        _elementFinder = elementFinder;
         _folder = Path.Combine(bepinexRootPath, "sprites2");
     }
+
+    // Tracks whether Harmony patching has been applied yet. Patching is deferred (see
+    // EnsurePatched) rather than done immediately in Awake/Load, because under IL2CPP,
+    // Harmony resolves Il2CppType tokens for patch parameter types (e.g. Image, GameObject)
+    // via Il2CppType.From. If this runs before Unity has naturally initialized those modules,
+    // it can force their static cctor to run reentrantly inside Il2CppInterop's generic-method
+    // hook, corrupting memory (AccessViolationException) and crashing the game.
+    private static bool _patched = false;
 
     public void Awake()
     {
         if (!_enabled)
             return;
 
-        Harmony.CreateAndPatchAll(typeof(SpriteReplacerService));
-        _logger.LogWarning($"SpriteReplacerV2 Plugin should be patched!");
-
         if (!Directory.Exists(_folder))
             Directory.CreateDirectory(_folder);
 
         LoadContracts();
-        _logger.LogWarning($"SpriteReplacer Plugin Loaded!");
+
+    }
+
+    /// <summary>
+    /// Applies the Harmony patches. Must be called after at least one frame/scene has run
+    /// (e.g. from the plugin's Update, not from Awake/Load) so Unity has had a chance to
+    /// naturally initialize the relevant modules before Harmony/Il2CppInterop tries to
+    /// resolve their type tokens - doing this too early can crash the game under IL2CPP.
+    /// </summary>
+    public void EnsurePatched()
+    {
+        if (_patched || !_enabled)
+            return;
+
+        Harmony.CreateAndPatchAll(typeof(SpriteReplacerService));
+        _patched = true;
+        _logger.LogWarning($"SpriteReplacerV2 Plugin patched!");
     }
 
     public void Reload()
     {
-        LoadContracts();
+
         ApplyAllContracts();
         _logger.LogWarning("Sprite Contracts Reloaded");
     }
@@ -114,8 +140,7 @@ public class SpriteReplacerService
 
     public static Image[] FindAllElements()
     {
-        // Find all TextMeshProUGUI components in the scene
-        return UnityEngine.Object.FindObjectsOfType<Image>();
+        return _elementFinder.FindAllElements();
     }
 
     public Image[] FindElementsAtCursor(float x, float y, float z)
@@ -123,8 +148,9 @@ public class SpriteReplacerService
         // Create a 10x10 pixel area around the cursor (20 pixel buffer on each side)
         var cursorArea = new Rect(x - 10, y - 10, 20, 20);
 
-        // Find all elements in the scene
-        var elements = UnityEngine.Object.FindObjectsOfType<Image>();
+        // Find all elements in the scene. Delegates to the host-specific finder rather than
+        // calling FindObjectsOfType<T>() directly - see ISpriteElementFinder.
+        var elements = _elementFinder.FindAllElements();
 
         var responseElements = new List<Image>();
 
@@ -368,21 +394,6 @@ public class SpriteReplacerService
         {
             _logger.LogError($"Error replacing sprite: {ex}");
         }
-    }
-
-    [HarmonyPostfix, HarmonyPatch(typeof(GameObject), nameof(GameObject.SetActive), [typeof(bool)])]
-    public static void Postfix_GameObject_SetActive(GameObject __instance)
-    {
-        //Logger.LogWarning($"Checking SetActive: {__instance.name}");
-
-        if (!ContractsLoaded)
-            return;
-
-        //TODO: This should be most efficient but we could use Object.Instantiate
-        //to get it at as the objects created. But maybe there is post processing occuring after.
-        var items = __instance.GetComponentsInChildren<Image>();
-        foreach (var item in items)
-            ReplaceSpriteInAsset(item);
     }
 
     //[HarmonyPrefix, HarmonyPatch(typeof(SweetPotato.ResourceManager), "GetAssetObjectSprite")]

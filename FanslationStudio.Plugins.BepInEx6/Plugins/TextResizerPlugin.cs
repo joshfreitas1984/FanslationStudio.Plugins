@@ -18,6 +18,7 @@ public class TextResizerPlugin : BaseUnityPlugin
     private KeyCode _reloadHotkey = KeyCode.KeypadPlus;
     private KeyCode _addResizerHotKey = KeyCode.KeypadMultiply;
 
+
     private void Awake()
     {
         _enabled = Config.Bind("General",
@@ -30,7 +31,7 @@ public class TextResizerPlugin : BaseUnityPlugin
 
         _logger = new BepInEx6Logger(base.Logger);
         _service = new TextResizerService(
-            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper());
+            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new MonoBehaviourAttacher());
         _service.Awake();
     }
 
@@ -39,17 +40,20 @@ public class TextResizerPlugin : BaseUnityPlugin
         if (!_enabled)
             return;
 
-        if (Input.GetKeyDown(_reloadHotkey))
+        _service.EnsurePatched();
+        _service.CheckForSceneChange();
+
+        if (UnityInput.Current.GetKeyDown(_reloadHotkey))
             _service.Reload();
 
-        if (Input.GetKeyDown(_addResizerHotKey))
+        if (UnityInput.Current.GetKeyDown(_addResizerHotKey))
             _service.AddResizersForScene();
 
-        var x = Input.mousePosition.x;
-        var y = Input.mousePosition.y;
-        var z = Input.mousePosition.z;
+        var x = UnityInput.Current.mousePosition.x;
+        var y = UnityInput.Current.mousePosition.y;
+        var z = UnityInput.Current.mousePosition.z;
 
-        if (Input.GetKeyDown(_addResizerAtCursorHotKey))
+        if (UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey))
             _service.AddResizersAtCursor(x, y, z);
     }
 }

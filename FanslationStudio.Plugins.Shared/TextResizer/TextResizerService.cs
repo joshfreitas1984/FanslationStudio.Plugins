@@ -33,48 +33,88 @@ public class TextResizerService
 
     private static IYamlHelper _yamlHelper;
 
-    public TextResizerService(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper)
+    // Host-runtime-specific attacher for the TextMetadata/LegacyTextMetadata components. See
+    // IBehaviourAttacher for why this can't be a concrete type shared across Mono/IL2CPP builds.
+    private static IBehaviourAttacher _behaviourAttacher;
+
+    // Used to detect scene changes by polling instead of subscribing to SceneManager.sceneLoaded.
+    // Directly subscribing a method group to that event fails under IL2CPP with a
+    // MissingMethodException, because the interop-generated UnityAction<T1,T2> type doesn't
+    // support the standard (object, IntPtr) delegate constructor the compiler emits.
+    private static int _lastSceneBuildIndex = -1;
+
+    public TextResizerService(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper, IBehaviourAttacher behaviourAttacher)
     {
         _logger = logger;
         _enabled = enabled;
         _resizerFolder = Path.Combine(bepinexRootPath, "resizers");
         _yamlHelper = yamlHelper;
+        _behaviourAttacher = behaviourAttacher;
     }
+
+    // Tracks whether Harmony patching has been applied yet. Patching is deferred (see
+    // EnsurePatched) rather than done immediately in Awake/Load, because under IL2CPP,
+    // Harmony resolves Il2CppType tokens for patch parameter types (e.g. TextMeshProUGUI)
+    // via Il2CppType.From. If this runs before Unity has naturally initialized the TMPro
+    // module, it forces TextMeshProUGUI's static cctor to run reentrantly inside Il2CppInterop's
+    // generic-method hook, corrupting memory (AccessViolationException) and crashing the game.
+    private static bool _patched = false;
 
     public void Awake()
     {
         if (!_enabled)
             return; 
 
-        Harmony.CreateAndPatchAll(typeof(TextResizerService));
-        _logger.LogWarning($"TextResizer Plugin should be patched!");
-
         if (!Directory.Exists(_resizerFolder))
             Directory.CreateDirectory(_resizerFolder);
 
         LoadResizers();
 
-        // Subscribe to scene loaded event to reapply resizers when scenes change
-        SceneManager.sceneLoaded += OnSceneLoaded;
+        _lastSceneBuildIndex = SceneManager.GetActiveScene().buildIndex;
 
         _logger.LogWarning($"TextResizer Plugin Loaded!");
     }
 
+    /// <summary>
+    /// Applies the Harmony patches. Must be called after at least one frame/scene has run
+    /// (e.g. from the plugin's Update, not from Awake/Load) so Unity has had a chance to
+    /// naturally initialize TextMeshPro before Harmony/Il2CppInterop tries to resolve its
+    /// type token - doing this too early crashes the game under IL2CPP.
+    /// </summary>
+    public void EnsurePatched()
+    {
+        if (_patched || !_enabled)
+            return;
+
+        Harmony.CreateAndPatchAll(typeof(TextResizerService));
+        _patched = true;
+        _logger.LogWarning($"TextResizer Plugin patched!");
+    }
+
+    /// <summary>
+    /// Should be called every frame (e.g. from the plugin's Update) to detect scene changes
+    /// and reapply resizers. Polling is used instead of subscribing to SceneManager.sceneLoaded
+    /// to avoid an IL2CPP interop MissingMethodException on the generic UnityAction delegate.
+    /// </summary>
+    public void CheckForSceneChange()
+    {
+        if (!ResizersLoaded)
+            return;
+
+        var activeScene = SceneManager.GetActiveScene();
+        if (activeScene.buildIndex == _lastSceneBuildIndex)
+            return;
+
+        _lastSceneBuildIndex = activeScene.buildIndex;
+        _logger.LogMessage($"Scene loaded: {activeScene.name}, reapplying all resizers");
+        ApplyAllResizers();
+    }
 
     public void Reload()
     {
         LoadResizers();
         ApplyAllResizers();
         _logger.LogWarning("Resizers Reloaded");
-    }
-
-    private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
-    {
-        if (!ResizersLoaded)
-            return;
-
-        _logger.LogMessage($"Scene loaded: {scene.name}, reapplying all resizers");
-        ApplyAllResizers();
     }
 
     public void AddResizersForScene()
@@ -136,8 +176,9 @@ public class TextResizerService
         // Create a 10x10 pixel area around the cursor (20 pixel buffer on each side)
         var cursorArea = new Rect(x - 10, y - 10, 20, 20);
 
-        // Find all TextMeshProUGUI components in the scene
-        var textElements = UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();
+        // Find all TextMeshProUGUI components in the scene. Delegates to the host-specific
+        // attacher rather than calling FindObjectsOfType<T>() directly - see FindAllTextElements.
+        var textElements = FindAllTextElements();
 
         var responseElements = new List<TextMeshProUGUI>();
 
@@ -180,8 +221,9 @@ public class TextResizerService
         // Create a 10x10 pixel area around the cursor (20 pixel buffer on each side)
         var cursorArea = new Rect(x - 10, y - 10, 20, 20);
 
-        // Find all Text components in the scene
-        var textElements = UnityEngine.Object.FindObjectsOfType<Text>();
+        // Find all Text components in the scene. Delegates to the host-specific attacher rather
+        // than calling FindObjectsOfType<T>() directly - see FindAllLegacyTextElements.
+        var textElements = FindAllLegacyTextElements();
 
         var responseElements = new List<Text>();
 
@@ -221,42 +263,16 @@ public class TextResizerService
 
     public static TextMeshProUGUI[] FindAllTextElements()
     {
-        // Find all TextMeshProUGUI components in the scene
-        var elems = UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();
-
-        //    if (elems == null || elems.Length == 0)
-        //    {
-        //        _logger.LogWarning("No TextMeshProUGUI elements found in scene. Logging scene objects for debugging:");
-
-        //        var allObjects = UnityEngine.Object.FindObjectsOfType<Component>();
-        //        var objectTypeGroups = new Dictionary<string, List<Component>>();
-
-        //        foreach (var obj in allObjects)
-        //        {
-        //            var typeName = obj.GetType().FullName;
-        //            if (!objectTypeGroups.ContainsKey(typeName))
-        //                objectTypeGroups[typeName] = new List<Component>();
-
-        //            objectTypeGroups[typeName].Add(obj);
-        //        }
-
-        //        _logger.LogMessage($"Found {objectTypeGroups.Count} different component types in scene:");
-
-        //        foreach (var kvp in objectTypeGroups)
-        //        {
-        //            var sample = kvp.Value[0];
-        //            var path = ObjectHelper.GetGameObjectPath(sample.gameObject);
-        //            _logger.LogMessage($"  {kvp.Key} (Count: {kvp.Value.Count}) - Sample: {path}");
-        //        }
-        //    }
-
-        return elems;
+        // UnityEngine.Object.FindObjectsOfType<T>() is generic and throws MissingMethodException
+        // at runtime under IL2CPP when called from code compiled in Shared - delegate to the
+        // host-specific attacher (see IBehaviourAttacher/.github/copilot-instructions.md item 4).
+        return _behaviourAttacher.FindAllTextElements();
     }
 
     public static Text[] FindAllLegacyTextElements()
     {
-        // Find all Text components in the scene
-        return UnityEngine.Object.FindObjectsOfType<Text>();
+        // Same reason as FindAllTextElements above.
+        return _behaviourAttacher.FindAllLegacyTextElements();
     }
 
     public void AddTextElementsToResizers(TextMeshProUGUI[] textElements, bool addUnderCursor = false, bool copyUnderCursor = false)
@@ -380,12 +396,11 @@ public class TextResizerService
 
             // Cache components
             var rectTransform = textComponent.rectTransform;
-            var metadata = textComponent.GetComponent<TextMetadata>();
+            var metadata = _behaviourAttacher.GetOrAttachTextMetadata(textComponent.gameObject, out var wasAttached);
 
-            // If metadata is not attached, add it and store the original values against it
-            if (metadata == null)
+            // If metadata was just attached, store the original values against it
+            if (wasAttached)
             {
-                metadata = textComponent.gameObject.AddComponent<TextMetadata>();
                 metadata.OriginalX = rectTransform.anchoredPosition.x;
                 metadata.OriginalY = rectTransform.anchoredPosition.y;
                 metadata.OriginalWidth = rectTransform.sizeDelta.x;
@@ -571,12 +586,11 @@ public class TextResizerService
 
             // Cache components
             var rectTransform = textComponent.rectTransform;
-            var metadata = textComponent.GetComponent<LegacyTextMetadata>();
+            var metadata = _behaviourAttacher.GetOrAttachLegacyTextMetadata(textComponent.gameObject, out var wasAttached);
 
-            // If metadata is not attached, add it and store the original values against it
-            if (metadata == null)
+            // If metadata was just attached, store the original values against it
+            if (wasAttached)
             {
-                metadata = textComponent.gameObject.AddComponent<LegacyTextMetadata>();
                 metadata.OriginalX = rectTransform.anchoredPosition.x;
                 metadata.OriginalY = rectTransform.anchoredPosition.y;
                 metadata.OriginalWidth = rectTransform.sizeDelta.x;
@@ -799,21 +813,6 @@ public class TextResizerService
             ApplyResizingToLegacyText(textElement);
     }
 
-    [HarmonyPostfix, HarmonyPatch(typeof(GameObject), nameof(GameObject.SetActive), [typeof(bool)])]
-    public static void Postfix_GameObject_SetActive(GameObject __instance, bool value)
-    {
-        if (!ResizersLoaded || !value)
-            return;
-
-        var tmpItems = __instance.GetComponentsInChildren<TextMeshProUGUI>(false);
-        foreach (var item in tmpItems)
-            ApplyResizing(item);
-
-        var textItems = __instance.GetComponentsInChildren<Text>(false);
-        foreach (var item in textItems)
-            ApplyResizingToLegacyText(item);
-    }
-
     [HarmonyPostfix, HarmonyPatch(typeof(TextMeshProUGUI), "OnEnable", MethodType.Normal)]
     public static void Postfix_TMP_OnEnable(TextMeshProUGUI __instance)
     {
@@ -849,24 +848,5 @@ public class TextResizerService
             return;
 
         ApplyResizingToLegacyText(__instance);
-    }
-
-    [HarmonyPostfix, HarmonyPatch(typeof(CanvasGroup), "alpha", MethodType.Setter)]
-    public static void Postfix_CanvasGroup_SetAlpha(CanvasGroup __instance, float value)
-    {
-        if (!ResizersLoaded)
-            return;
-
-        // Only apply when canvas is being made visible (alpha going above 0)
-        if (value > 0)
-        {
-            var tmpItems = __instance.GetComponentsInChildren<TextMeshProUGUI>(false);
-            foreach (var item in tmpItems)
-                ApplyResizing(item);
-
-            var textItems = __instance.GetComponentsInChildren<Text>(false);
-            foreach (var item in textItems)
-                ApplyResizingToLegacyText(item);
-        }
     }
 }

@@ -23,6 +23,12 @@
     <PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
     <PackageReference Include="BepInEx.Unity.Mono" Version="6.0.0-be.753" PrivateAssets="all" />
     <PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" />
+    <!-- BepInEx.Unity.Mono transitively pulls in the "UnityEngine" nuget package (a monolithic
+         Unity 5.6.1 reference assembly), which duplicates the split-module engine types
+         (GameObject, MonoBehaviour, TextAnchor, etc.) already provided by the Reference\*.dll
+         assemblies below, causing CS0433 ambiguous-type errors. Excluding its compile assets
+         here lets the explicit module References win. -->
+    <PackageReference Include="UnityEngine" Version="5.6.1" ExcludeAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
@@ -46,14 +52,17 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!--<Reference Include="UnityEngine">
+    <Reference Include="UnityEngine">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.dll</HintPath>
-    </Reference>-->
-    <!--<Reference Include="UnityEngine.CoreModule">
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.CoreModule.dll</HintPath>
-    </Reference>-->
+    </Reference>
     <Reference Include="UnityEngine.UIModule">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.UIModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.TextRenderingModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.ImageConversionModule">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.ImageConversionModule.dll</HintPath>

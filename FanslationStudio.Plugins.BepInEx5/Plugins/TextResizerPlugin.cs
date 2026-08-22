@@ -1,16 +1,8 @@
 ﻿using BepInEx;
-using BepInEx.Logging;
 using FanslationStudio.Plugins.Shared;
-using FanslationStudio.Plugins.Sprites;
 using FanslationStudio.Plugins.Support;
 using FanslationStudio.Plugins.TextResizer;
 using FanslationStudio.Plugins.YamlDotNet;
-using HarmonyLib;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Text.RegularExpressions;
-using TMPro;
 using UnityEngine;
 
 namespace FanslationStudio.Plugins.Plugins;
@@ -22,7 +14,7 @@ namespace FanslationStudio.Plugins.Plugins;
 public class TextResizerServiceWrapper : TextResizerService
 {
     public TextResizerServiceWrapper(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper)
-        : base(logger, enabled, bepinexRootPath, yamlHelper)
+        : base(logger, enabled, bepinexRootPath, yamlHelper, new MonoBehaviourAttacher())
     {
     }
 }
@@ -58,6 +50,9 @@ internal class TextResizerPlugin : BaseUnityPlugin
     {
         if (!_enabled)
             return;
+
+        _service.EnsurePatched();
+        _service.CheckForSceneChange();
 
         if (UnityInput.Current.GetKeyDown(_reloadHotkey))
             _service.Reload();

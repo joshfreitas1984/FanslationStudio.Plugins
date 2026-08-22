@@ -42,4 +42,12 @@ public class StringPatcherPlugin : BaseUnityPlugin
 
         StringPatcherService.Awake();
     }
+
+    internal void Update()
+    {
+        if (!_enabled)
+            return;
+
+        StringPatcherService.EnsurePatched();
+    }
 }

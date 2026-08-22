@@ -24,6 +24,15 @@ public class StringPatcherService
     private string _resourcePath;
     private static IYamlHelper _yamlHelper;
 
+    // Tracks whether patches have been applied yet. Applying is deferred (see EnsurePatched)
+    // rather than done immediately in Awake/Load, because under IL2CPP, Harmony resolves
+    // Il2CppType tokens for patch parameter types via Il2CppType.From. If this runs before
+    // Unity has naturally initialized the relevant modules (e.g. TMPro), it can force their
+    // static cctor to run reentrantly inside Il2CppInterop's generic-method hook, corrupting
+    // memory (AccessViolationException) and crashing the game.
+    private bool _patched = false;
+    private string _pendingFilePath;
+
     public StringPatcherService(IPluginLogger logger, bool enabled, 
         Harmony harmony, string resourcePath, string bepinExRootPath, IYamlHelper yamlHelper)
     {
@@ -47,9 +56,24 @@ public class StringPatcherService
         var filePath = Path.Combine(resourcePath, "dynamicStrings.txt");
 
         if (File.Exists(filePath))
-            LoadTranslationsAndApplyPatches(filePath);
+            _pendingFilePath = filePath;
         else
             Logger.LogWarning($"Translation file not found at: {resourcePath}");
+    }
+
+    /// <summary>
+    /// Applies the Harmony patches. Must be called after at least one frame/scene has run
+    /// (e.g. from the plugin's Update, not from Awake/Load) so Unity has had a chance to
+    /// naturally initialize the relevant modules before Harmony/Il2CppInterop tries to
+    /// resolve their type tokens - doing this too early can crash the game under IL2CPP.
+    /// </summary>
+    public void EnsurePatched()
+    {
+        if (_patched || !_enabled || _pendingFilePath == null)
+            return;
+
+        _patched = true;
+        LoadTranslationsAndApplyPatches(_pendingFilePath);
     }
 
     public static List<GroupedDynamicStringContracts> GroupedDynamicStringContracts(List<DynamicStringContract> contracts)

@@ -2,11 +2,8 @@
 using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.Sprites;
 using FanslationStudio.Plugins.Support;
-using FanslationStudio.Plugins.TextResizer;
 using FanslationStudio.Plugins.YamlDotNet;
-using HarmonyLib;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace FanslationStudio.Plugins.Plugins;
 
@@ -15,10 +12,18 @@ namespace FanslationStudio.Plugins.Plugins;
 // and we don't want to use reflection everywhere.
 public class SpriteReplacerServiceWrapper : SpriteReplacerService
 {
-    public SpriteReplacerServiceWrapper(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper)
-        : base(logger, enabled, bepinexRootPath, yamlHelper)
+    public SpriteReplacerServiceWrapper(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper, ISpriteElementFinder elementFinder)
+        : base(logger, enabled, bepinexRootPath, yamlHelper, elementFinder)
     {
     }
+}
+
+// Mono (BepInEx5) compiles directly against the real UnityEngine assemblies, so calling the
+// generic FindObjectsOfType<T>() here is safe - unlike Shared, which is compiled against the
+// Mono-style stub assemblies.
+public class MonoSpriteElementFinder : ISpriteElementFinder
+{
+    public UnityEngine.UI.Image[] FindAllElements() => UnityEngine.Object.FindObjectsOfType<UnityEngine.UI.Image>();
 }
 
 [BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.SpriteReplacer", "SpriteReplacer", MyPluginInfo.PLUGIN_VERSION)]
@@ -41,7 +46,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
             return;
 
         _service = new SpriteReplacerServiceWrapper(
-            new BepInEx5Logger(Logger), _enabled, Paths.BepInExRootPath, new YamlHelper());
+            new BepInEx5Logger(Logger), _enabled, Paths.BepInExRootPath, new YamlHelper(), new MonoSpriteElementFinder());
         _service.Awake();
     }
 
@@ -49,6 +54,8 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
     {
         if (!_enabled)
             return;
+
+        _service.EnsurePatched();
 
         if (UnityInput.Current.GetKeyDown(_reloadHotkey))
             _service.Reload();

@@ -33,16 +33,38 @@ public class PrefabTextDumperService
         BepinExPath = bepinExPath;
     }
 
+    // Tracks whether Harmony patching has been applied yet. Patching is deferred (see
+    // EnsurePatched) rather than done immediately in Awake/Load, because under IL2CPP,
+    // Harmony resolves Il2CppType tokens for patch parameter types (e.g. GameObject) via
+    // Il2CppType.From. If this runs before Unity has naturally initialized the relevant
+    // modules, it can force their static cctor to run reentrantly inside Il2CppInterop's
+    // generic-method hook, corrupting memory (AccessViolationException) and crashing the game.
+    private static bool _patched = false;
+
     public void Awake()
     {        
         if (!Enabled)
             return;
 
         Logger.LogWarning("Prefab Text Dumper plugin is starting...");
-        Harmony.CreateAndPatchAll(typeof(PrefabTextDumperService));
-        Logger.LogWarning("Prefab Text Dumper plugin patching complete!");
 
         DumpAllPrefabTexts();
+    }
+
+    /// <summary>
+    /// Applies the Harmony patches. Must be called after at least one frame/scene has run
+    /// (e.g. from the plugin's Update, not from Awake/Load) so Unity has had a chance to
+    /// naturally initialize the relevant modules before Harmony/Il2CppInterop tries to
+    /// resolve their type tokens - doing this too early can crash the game under IL2CPP.
+    /// </summary>
+    public void EnsurePatched()
+    {
+        if (_patched || !Enabled)
+            return;
+
+        Harmony.CreateAndPatchAll(typeof(PrefabTextDumperService));
+        _patched = true;
+        Logger.LogWarning("Prefab Text Dumper plugin patching complete!");
     }
 
     public void DumpAllPrefabTexts()
@@ -153,7 +175,10 @@ public class PrefabTextDumperService
     {
         try
         {
-            var components = gameObject.GetComponentsInChildren<Component>(true);
+            // Note: using the non-generic Type overload here instead of GetComponentsInChildren<Component>(true)
+            // because that generic instantiation isn't guaranteed to exist under IL2CPP interop and can
+            // throw a MissingMethodException at runtime.
+            var components = gameObject.GetComponentsInChildren(typeof(Component), true);
             foreach (var component in components)
             {
                 if (component == null)

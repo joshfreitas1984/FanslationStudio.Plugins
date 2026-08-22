@@ -7,6 +7,14 @@ using UnityEngine;
 
 namespace FanslationStudio.Plugins.Plugins;
 
+// Mono (BepInEx6) compiles directly against the real UnityEngine assemblies, so calling the
+// generic FindObjectsOfType<T>() here is safe - unlike Shared, which is compiled against the
+// Mono-style stub assemblies.
+public class MonoSpriteElementFinder : ISpriteElementFinder
+{
+    public UnityEngine.UI.Image[] FindAllElements() => UnityEngine.Object.FindObjectsOfType<UnityEngine.UI.Image>();
+}
+
 [BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.SpriteReplacer", "SpriteReplacer", MyPluginInfo.PLUGIN_VERSION)]
 public class SpriteReplacerPlugin : BaseUnityPlugin
 {
@@ -29,7 +37,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
 
         _logger = new BepInEx6Logger(base.Logger);
         _service = new SpriteReplacerService(
-            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper());
+            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new MonoSpriteElementFinder());
 
         _service.Awake();
     }
@@ -39,17 +47,19 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
         if (!_enabled)
             return;
 
-        if (Input.GetKeyDown(_reloadHotkey))
+        _service.EnsurePatched();
+
+        if (UnityInput.Current.GetKeyDown(_reloadHotkey))
             _service.Reload();
 
-        if (Input.GetKeyDown(_addAllHotKey))
+        if (UnityInput.Current.GetKeyDown(_addAllHotKey))
             _service.AddAll();
 
-        var x = Input.mousePosition.x;
-        var y = Input.mousePosition.y;
-        var z = Input.mousePosition.z;
+        var x = UnityInput.Current.mousePosition.x;
+        var y = UnityInput.Current.mousePosition.y;
+        var z = UnityInput.Current.mousePosition.z;
 
-        if (Input.GetKeyDown(_addAtCursorHotKey))
+        if (UnityInput.Current.GetKeyDown(_addAtCursorHotKey))
             _service.AddAtCursor(x, y, z);
     }
 }
