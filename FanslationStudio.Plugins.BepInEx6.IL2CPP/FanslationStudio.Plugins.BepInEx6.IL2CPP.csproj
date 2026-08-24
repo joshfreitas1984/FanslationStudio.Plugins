@@ -60,6 +60,9 @@
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>unhollowed\UnityEngine.CoreModule.dll</HintPath>
     </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>unhollowed\UnityEngine.AssetBundleModule.dll</HintPath>
+    </Reference>
     <Reference Include="UnityEngine.UIModule">
       <HintPath>unhollowed\UnityEngine.UIModule.dll</HintPath>
     </Reference>

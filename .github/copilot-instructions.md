@@ -61,7 +61,23 @@ Do **not** reintroduce these without first re-verifying against a newer/older Il
    `MissingMethodException` at runtime, because IL2CPP can't resolve the native call from within
    shared/generic method body code. The call must be inlined directly, non-generically, at each
    use site.
-4. **CONFIRMED ROOT CAUSE (superseding earlier speculation in this section): any Unity API call
+4. **Any *first-time* use of a generic Il2Cpp interop method (e.g. `GetComponent<T>()`,
+   `AddComponent<T>()`) made while already nested inside a native-triggered call stack** - not
+   just `Load()`/`ClassInjector`. Confirmed culprit: `GameObject.GetComponent<TextMetadataComponent>()`
+   (called from `Il2CppElementFinder.GetOrAttachTextMetadata`/`GetOrAttachLegacyTextMetadata`,
+   itself called from a Harmony postfix on `UnityEngine.UI.Text.OnEnable`) crashed with
+   `AccessViolationException` in
+   `GameObject+MethodInfoStoreGeneric_GetComponent_Public_T_0<T>..cctor()`. Root cause: the first
+   time a specific closed generic instantiation of a generic interop method is used, Il2CppInterop
+   has to run a static cctor that itself calls `il2cpp_runtime_invoke` - and `Text.OnEnable` is
+   itself invoked by native IL2CPP code via a `DynamicClass` thunk, so this is the same reentrancy
+   hazard as item 1, just triggered by a different native entry point (a component lifecycle
+   method firing during normal gameplay, not `Load()`). **Resolved** by eliminating the custom
+   `TextMetadataComponent`/`LegacyTextMetadataComponent` `MonoBehaviour`s entirely for the IL2CPP
+   host - see the `TextMetadataComponents.cs`/`Il2CppElementFinder.cs` note below. This also means
+   `ClassInjector.RegisterTypeInIl2Cpp<T>()` for these types (which was already disabled, see item
+   2) is no longer needed at all.
+5. **CONFIRMED ROOT CAUSE (superseding earlier speculation in this section): any Unity API call
    made from code compiled in `FanslationStudio.Plugins.Shared` throws `MissingMethodException`
    at runtime under IL2CPP, even for APIs that verifiably exist in the game's real assembly.**
    `Shared` is compiled against the Mono-style stub assemblies in `Reference\` (e.g.
@@ -81,11 +97,33 @@ Do **not** reintroduce these without first re-verifying against a newer/older Il
    in `Shared`.** Where `Shared` needs this behavior, either move the method to the host project,
    or take it as a dependency-injected delegate/interface implemented in the host project (see
    `IBehaviourAttacher`/`Il2CppBehaviourAttacher` for the existing pattern).
-5. **Directly subscribing a method group to `SceneManager.sceneLoaded`** fails under IL2CPP with
+6. **Directly subscribing a method group to `SceneManager.sceneLoaded`** fails under IL2CPP with
    a `MissingMethodException`, because the interop-generated `UnityAction<T1,T2>` type doesn't
    support the standard `(object, IntPtr)` delegate constructor the C# compiler emits for a method
    group. (Documented in `TextResizerService`'s `_lastSceneBuildIndex` polling comment — use
    polling instead of subscribing.)
+7. **Passing a plain managed array (e.g. `Vector3[]`) as an "output"/fill-in parameter to an
+   unhollowed IL2CPP method silently loses the results.** Confirmed culprit:
+   `RectTransform.GetWorldCorners(Vector3[])` in `Il2CppElementFinder.GetWorldCorners` - compiled
+   without error and never threw, but always returned four zeroed `Vector3`s, causing
+   `TextResizerService.FindTextElementsUnderCursor`/`FindLegacyTextElementsUnderCursor` and
+   `SpriteReplacerService.FindElementsAtCursor` to never match anything. Root cause: the real
+   unhollowed method signature takes `Il2CppInterop.Runtime.InteropTypes.Arrays.
+   Il2CppStructArray<Vector3>`, not `Vector3[]`. `Il2CppStructArray<T>` defines an *implicit*
+   `Vector3[] -> Il2CppStructArray<Vector3>` conversion (`Il2CppStructArray(T[] arr) : base(...)
+   { arr.CopyTo(this); }`), so code that declares `var corners = new Vector3[4];` and passes it
+   directly compiles fine - but that conversion allocates a **new, separate** native array and
+   copies the (still-empty) managed array into it. The native method then writes its results into
+   that temporary copy; the caller's original `corners` array is never touched and stays all
+   zeros. **Fix**: declare the local as `Il2CppStructArray<Vector3>` directly (not `Vector3[]`),
+   pass that to the native call, and convert the result back to a managed array afterwards -
+   `Il2CppArrayBase<T>` has an implicit `operator T[]?(Il2CppArrayBase<T>?)` that copies the
+   native array's contents out (this direction actually works, only the array-literal-as-
+   parameter direction silently loses data). This is a distinct hazard from `MissingMethodException`
+   (item 4/5 above) - the call *succeeds* and returns default/zeroed data instead of throwing, so
+   it's much easier to miss. Any other unhollowed method that takes an array parameter as an
+   in/out or output-only buffer (fill-in style, not a `params`-style read-only input) should be
+   treated as suspect and audited the same way before trusting its results.
 
 ## Confirmed-safe pattern for per-frame ticking under IL2CPP (no MonoBehaviour needed)
 
@@ -184,6 +222,30 @@ Known instances still open (found by repo-wide grep, not yet fixed) as of this n
   code) - no host project currently constructs this service, so there's no live crash path and no
   way to test a fix in-game. Fix this the same way as `SpriteReplacerService` (per-host finder
   interface) if/when this plugin is re-enabled.
+- ~~`TextResizerService.FindTextElementsUnderCursor()`/`FindLegacyTextElementsUnderCursor()` and
+  `SpriteReplacerService.FindElementsAtCursor()` - `rectTransform.GetWorldCorners(Vector3[])`~~
+  **Resolved**: same root cause as item 4 (instance method, non-generic, but still Shared-compiled
+  IL calling a real Unity API - `MissingMethodException: Void UnityEngine.RectTransform.
+  GetWorldCorners(UnityEngine.Vector3[])`). Added `GetWorldCorners(RectTransform)` to
+  `IBehaviourAttacher` and `ISpriteElementFinder`, implemented in `MonoElementFinder`
+  (`BepInEx5`/`BepInEx6`) and `Il2CppElementFinder` (`BepInEx6.IL2CPP`). Both services now
+  delegate instead of calling `GetWorldCorners` directly. **Note**: this shows the "must be
+  Type-based/generic" framing of item 4 was incomplete - plain instance methods on Unity types
+  can hit the same failure when called from `Shared`-compiled IL. Treat *any* Unity API call in
+  `Shared` as suspect, not just the generic/Type-based ones, and audit accordingly.
+- **Preemptive move, not yet crash-confirmed**: `SpriteReplacerService.AddElementsToContracts`
+  (texture-dump path) and `ReplaceSpriteInAsset` (sprite-replace path) called
+  `Texture2D`/`RenderTexture`/`Graphics.Blit`/`Sprite.Create` APIs directly from `Shared`. Added
+  `GetExportableTextureBytes(Texture2D)` and `CreateReplacementSprite(byte[], Rect, Vector2,
+  float)` to `ISpriteElementFinder`, implemented in `MonoElementFinder` (`BepInEx5`/`BepInEx6`)
+  and `Il2CppElementFinder` (`BepInEx6.IL2CPP`). Both services now delegate instead of
+  constructing `Texture2D`/`Sprite` objects directly. Unlike the other items in this section,
+  this was done proactively based on the pattern (not from an observed crash) - these code paths
+  (dumping a non-readable texture, or actually applying a sprite replacement) may not have been
+  exercised yet. If a `MissingMethodException` from these APIs is reported later, this is already
+  fixed; if not, no harm done. Note the original `ReplaceSpriteInAsset` also logged a "resizing"
+  warning via `_logger` when the rect didn't fit the replacement texture - that diagnostic log
+  was dropped in the move since the finder classes don't have a logger reference.
 - `FanslationStudio.Plugins.Shared\TextResizer\TextChangedBehaviour.cs` -
   `GetComponent<TextMeshProUGUI>()` inside a `MonoBehaviour`-derived class living in `Shared`.
   **Dormant, not actively fixed**: the only references to this class are inside fully

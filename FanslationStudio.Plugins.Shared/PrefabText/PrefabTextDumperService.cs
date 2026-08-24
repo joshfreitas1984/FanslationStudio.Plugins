@@ -19,18 +19,24 @@ public class PrefabTextDumperService
     public static bool Enabled = false;
     public static string RegexPattern;
     public static string DumpFilePath;
-    public static string ManagedPath;
+    public static string GameDataPath;
     private readonly string BepinExPath;
 
+    // Host-runtime-specific finder for GameObjects/Components. See IPrefabTextFinder for why this
+    // can't be a direct Resources.FindObjectsOfTypeAll/GetComponentsInChildren call from Shared.
+    private readonly IPrefabTextFinder _elementFinder;
+
     public PrefabTextDumperService(IPluginLogger logger,
-        string dumpFilePath, string regexPattern, bool enabled, string managedPath, string bepinExPath)
+        string dumpFilePath, string regexPattern, bool enabled, string gameDataPath, string bepinExPath,
+        IPrefabTextFinder elementFinder)
     {
         Logger = logger;
         DumpFilePath = dumpFilePath;
         RegexPattern = regexPattern;
         Enabled = enabled;
-        ManagedPath = managedPath;
+        GameDataPath = gameDataPath;
         BepinExPath = bepinExPath;
+        _elementFinder = elementFinder;
     }
 
     // Tracks whether Harmony patching has been applied yet. Patching is deferred (see
@@ -42,13 +48,12 @@ public class PrefabTextDumperService
     private static bool _patched = false;
 
     public void Awake()
-    {        
+    {
         if (!Enabled)
             return;
 
         Logger.LogWarning("Prefab Text Dumper plugin is starting...");
-
-        DumpAllPrefabTexts();
+        Logger.LogWarning("Press the dump hotkey once you're in-game (after scenes/UI have loaded) to scan for prefab text.");
     }
 
     /// <summary>
@@ -72,12 +77,11 @@ public class PrefabTextDumperService
         try
         {
             var exportedStrings = new HashSet<string>();
-            var gameDataPath = Path.GetFullPath(Path.Combine(ManagedPath, ".."));
 
-            Logger.LogWarning($"Scanning for prefabs in: {gameDataPath}");
+            Logger.LogWarning($"Scanning for prefabs in: {GameDataPath}");
 
             LoadPrefabsFromResources(exportedStrings);
-            LoadPrefabsFromAssetBundles(gameDataPath, exportedStrings);
+            LoadPrefabsFromAssetBundles(GameDataPath, exportedStrings);
 
             if (exportedStrings.Count > 0)
             {
@@ -100,12 +104,12 @@ public class PrefabTextDumperService
     {
         try
         {
-            var allGameObjects = Resources.FindObjectsOfTypeAll(typeof(GameObject));
+            var allGameObjects = _elementFinder.FindAllGameObjectsInResources();
             Logger.LogWarning($"Found {allGameObjects.Length} GameObjects in Resources");
 
-            foreach (var obj in allGameObjects)
+            foreach (var gameObject in allGameObjects)
             {
-                if (obj is GameObject gameObject)
+                if (gameObject != null)
                 {
                     ExtractTextFromGameObject(gameObject, exportedStrings);
                 }
@@ -122,7 +126,8 @@ public class PrefabTextDumperService
         try
         {
             var assetBundleFiles = Directory.GetFiles(gameDataPath, "*", SearchOption.AllDirectories)
-                .Where(f => {
+                .Where(f =>
+                {
                     var fileName = Path.GetFileName(f).ToLowerInvariant();
                     var ext = Path.GetExtension(f).ToLowerInvariant();
 
@@ -131,32 +136,44 @@ public class PrefabTextDumperService
                         fileName.StartsWith("level"))
                         return false;
 
-                    return (ext == ".assets" || ext == ".unity3d" || ext == ".assetbundle");                       
+                    // .bundle is the extension used by Unity's Addressables/AssetBundle Browser
+                    // output and is very common for shipped external bundles - the original
+                    // filter missed it entirely.
+                    return ext == ".assets" || ext == ".unity3d" || ext == ".assetbundle" || ext == ".bundle";
                 })
                 .ToList();
 
             Logger.LogWarning($"Found {assetBundleFiles.Count} potential asset bundle files");
 
+            if (assetBundleFiles.Count == 0)
+            {
+                // sharedassets*/level*/resources.assets/globalgamemanagers are intentionally
+                // excluded above - they're Unity's internal monolithic data files, not standalone
+                // asset bundles, and can't be opened via AssetBundle.LoadFromFile. A game that
+                // packs everything into those files (no separate .assets/.unity3d/.bundle files)
+                // simply has no external bundles for this scan to find - that's expected, not a
+                // bug. Prefab text baked into those files can only be reached via objects Unity
+                // has actually loaded into memory (see LoadPrefabsFromResources), which requires
+                // triggering the dump once relevant scenes/UI have loaded rather than at startup.
+                Logger.LogWarning("No external asset bundle files found - this game likely packs all assets into sharedassets*/level*/resources.assets files instead, which aren't scannable this way. Try triggering the dump again once you're further into the game (menus/scenes loaded), since LoadPrefabsFromResources only sees objects Unity has already loaded into memory.");
+            }
+
             foreach (var bundleFile in assetBundleFiles)
             {
                 try
                 {
-                    var bundle = AssetBundle.LoadFromFile(bundleFile);
-                    if (bundle != null)
+                    // Delegated to the host-specific finder (see IPrefabTextFinder) - the whole
+                    // AssetBundle.LoadFromFile/GetAllAssetNames/LoadAsset/Unload sequence throws
+                    // MissingMethodException at runtime under IL2CPP when called from Shared.
+                    var gameObjects = _elementFinder.LoadGameObjectsFromAssetBundle(bundleFile);
+                    Logger.LogWarning($"Loaded bundle: {Path.GetFileName(bundleFile)} with {gameObjects.Length} GameObject assets");
+
+                    foreach (var gameObject in gameObjects)
                     {
-                        var allAssetNames = bundle.GetAllAssetNames();
-                        Logger.LogWarning($"Loaded bundle: {Path.GetFileName(bundleFile)} with {allAssetNames.Length} assets");
-
-                        foreach (var assetName in allAssetNames)
+                        if (gameObject != null)
                         {
-                            var asset = bundle.LoadAsset(assetName);
-                            if (asset is GameObject gameObject)
-                            {
-                                ExtractTextFromGameObject(gameObject, exportedStrings);
-                            }
+                            ExtractTextFromGameObject(gameObject, exportedStrings);
                         }
-
-                        bundle.Unload(false);
                     }
                 }
                 catch (Exception ex)
@@ -175,10 +192,10 @@ public class PrefabTextDumperService
     {
         try
         {
-            // Note: using the non-generic Type overload here instead of GetComponentsInChildren<Component>(true)
-            // because that generic instantiation isn't guaranteed to exist under IL2CPP interop and can
-            // throw a MissingMethodException at runtime.
-            var components = gameObject.GetComponentsInChildren(typeof(Component), true);
+            // Delegated to the host-specific finder (see IPrefabTextFinder) - calling
+            // GetComponentsInChildren(Type, bool) directly from Shared throws MissingMethodException
+            // at runtime under IL2CPP.
+            var components = _elementFinder.GetComponentsInChildren(gameObject, true);
             foreach (var component in components)
             {
                 if (component == null)
@@ -210,9 +227,15 @@ public class PrefabTextDumperService
         if (type is null)
             return response;
 
+        // Type.GetField with BindingFlags.NonPublic does NOT search inherited members unless
+        // BindingFlags.FlattenHierarchy is also specified. TextMeshProUGUI's "m_text" field is
+        // declared on its base class TMP_Text, not on TextMeshProUGUI itself, so without
+        // FlattenHierarchy this always returned null for every TMP component - silently skipping
+        // the vast majority of in-game text. UnityEngine.UI.Text's "m_Text" happened to be
+        // declared directly on Text, so that path worked by coincidence.
         var textField =
-            type.GetField("m_text", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-            ?? type.GetField("m_Text", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            type.GetField("m_text", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
+            ?? type.GetField("m_Text", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy);
 
         if (textField != null && textField.FieldType == typeof(string))
         {

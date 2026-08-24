@@ -7,18 +7,10 @@ using UnityEngine;
 
 namespace FanslationStudio.Plugins.Plugins;
 
-// Mono (BepInEx6) compiles directly against the real UnityEngine assemblies, so calling the
-// generic FindObjectsOfType<T>() here is safe - unlike Shared, which is compiled against the
-// Mono-style stub assemblies.
-public class MonoSpriteElementFinder : ISpriteElementFinder
-{
-    public UnityEngine.UI.Image[] FindAllElements() => UnityEngine.Object.FindObjectsOfType<UnityEngine.UI.Image>();
-}
-
 [BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.SpriteReplacer", "SpriteReplacer", MyPluginInfo.PLUGIN_VERSION)]
 public class SpriteReplacerPlugin : BaseUnityPlugin
 {
-    private static IPluginLogger _logger;    
+    private static IPluginLogger _logger;
     private static SpriteReplacerService _service;
     private KeyCode _addAtCursorHotKey = KeyCode.F1;
     private KeyCode _addAllHotKey = KeyCode.F2;
@@ -37,7 +29,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
 
         _logger = new BepInEx6Logger(base.Logger);
         _service = new SpriteReplacerService(
-            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new MonoSpriteElementFinder());
+            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new MonoElementFinder());
 
         _service.Awake();
     }

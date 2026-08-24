@@ -31,7 +31,7 @@ public class TextResizerPlugin : BaseUnityPlugin
 
         _logger = new BepInEx6Logger(base.Logger);
         _service = new TextResizerService(
-            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new MonoBehaviourAttacher());
+            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new MonoElementFinder());
         _service.Awake();
     }
 

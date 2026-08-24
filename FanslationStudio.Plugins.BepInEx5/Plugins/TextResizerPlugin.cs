@@ -14,7 +14,7 @@ namespace FanslationStudio.Plugins.Plugins;
 public class TextResizerServiceWrapper : TextResizerService
 {
     public TextResizerServiceWrapper(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper)
-        : base(logger, enabled, bepinexRootPath, yamlHelper, new MonoBehaviourAttacher())
+        : base(logger, enabled, bepinexRootPath, yamlHelper, new MonoElementFinder())
     {
     }
 }

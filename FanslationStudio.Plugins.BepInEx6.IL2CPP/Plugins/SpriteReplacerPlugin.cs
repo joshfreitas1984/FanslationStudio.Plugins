@@ -10,19 +10,10 @@ using UnityEngine;
 
 namespace FanslationStudio.Plugins.Plugins;
 
-// UnityEngine.Object.FindObjectsOfType<T>() is generic, so like GetComponent<T>/AddComponent<T>
-// elsewhere, it must be called from code compiled directly in this host project (against the
-// real unhollowed assemblies) rather than from Shared, where it throws MissingMethodException
-// at runtime.
-public class Il2CppSpriteElementFinder : ISpriteElementFinder
-{
-    public UnityEngine.UI.Image[] FindAllElements() => UnityEngine.Object.FindObjectsOfType<UnityEngine.UI.Image>();
-}
-
 [BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.SpriteReplacer", "SpriteReplacer", MyPluginInfo.PLUGIN_VERSION)]
 public class SpriteReplacerPlugin : BasePlugin
 {
-    private static IPluginLogger _logger;    
+    private static IPluginLogger _logger;
     private static SpriteReplacerService _service;
     private static readonly KeyboardShortcut AddAtCursorHotKey = new(KeyCode.F1);
     private static readonly KeyboardShortcut AddAllHotKey = new(KeyCode.F2);
@@ -41,7 +32,7 @@ public class SpriteReplacerPlugin : BasePlugin
 
         _logger = new BepInEx6Logger(base.Log);
         _service = new SpriteReplacerService(
-            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new Il2CppSpriteElementFinder());
+            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new Il2CppElementFinder());
 
         _service.Awake();
 

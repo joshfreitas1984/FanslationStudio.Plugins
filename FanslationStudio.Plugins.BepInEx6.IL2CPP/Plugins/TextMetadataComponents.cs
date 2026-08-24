@@ -1,21 +1,24 @@
-using System;
 using FanslationStudio.Plugins.TextResizer;
-using Il2CppInterop.Runtime.Injection;
 using TMPro;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace FanslationStudio.Plugins.Plugins;
 
-// IL2CPP concrete implementations of ITextMetadata/ILegacyTextMetadata. These must derive from
-// the IL2CPP-interop MonoBehaviour and declare the (IntPtr) constructor that Il2CppInterop uses
-// to wrap native instances, and must be registered with ClassInjector before use. Using the
-// Mono-compiled equivalents from FanslationStudio.Plugins.Shared here would corrupt IL2CPP's
-// type/method tables (surfacing later as an unrelated AccessViolationException).
-public class TextMetadataComponent : MonoBehaviour, ITextMetadata
+// Plain data holders for ITextMetadata/ILegacyTextMetadata under IL2CPP - NOT MonoBehaviours.
+// These used to be custom MonoBehaviour-derived components attached via AddComponent<T>/
+// GetComponent<T>, requiring ClassInjector.RegisterTypeInIl2Cpp<T>() registration. Both the
+// registration call and the first-time use of the generic GetComponent<T>()/AddComponent<T>()
+// interop methods have been confirmed to crash with AccessViolationException under this game's
+// IL2CPP build - registration crashes even from non-Load() call sites (see
+// .github/copilot-instructions.md item 2), and GetComponent<T>() crashes the first time it's
+// resolved while already nested inside a native-triggered call stack (e.g. a Harmony postfix on
+// Text.OnEnable, itself invoked by IL2CPP native code). Storing metadata in a plain dictionary
+// keyed by GameObject.GetInstanceID() (a simple, already-resolved non-generic API) avoids both
+// problems entirely. Tradeoff: entries are never removed when a GameObject is destroyed, so this
+// leaks a small amount of managed memory per unique text element seen for the lifetime of the
+// process - acceptable since the set of on-screen text elements is bounded and small.
+public class TextMetadataComponent : ITextMetadata
 {
-    public TextMetadataComponent(IntPtr ptr) : base(ptr) { }
-
     public string ActiveResizerPath { get; set; }
 
     public float OriginalX { get; set; }
@@ -40,10 +43,8 @@ public class TextMetadataComponent : MonoBehaviour, ITextMetadata
     public float AdjustHeight { get; set; }
 }
 
-public class LegacyTextMetadataComponent : MonoBehaviour, ILegacyTextMetadata
+public class LegacyTextMetadataComponent : ILegacyTextMetadata
 {
-    public LegacyTextMetadataComponent(IntPtr ptr) : base(ptr) { }
-
     public string ActiveResizerPath { get; set; }
 
     public float OriginalX { get; set; }
@@ -65,48 +66,4 @@ public class LegacyTextMetadataComponent : MonoBehaviour, ILegacyTextMetadata
     public float AdjustY { get; set; }
     public float AdjustWidth { get; set; }
     public float AdjustHeight { get; set; }
-}
-
-public class Il2CppBehaviourAttacher : IBehaviourAttacher
-{
-    public static void EnsureRegistered()
-    {
-        //if (!ClassInjector.IsTypeRegisteredInIl2Cpp<TextMetadataComponent>())
-        //    ClassInjector.RegisterTypeInIl2Cpp<TextMetadataComponent>();
-
-        //if (!ClassInjector.IsTypeRegisteredInIl2Cpp<LegacyTextMetadataComponent>())
-        //    ClassInjector.RegisterTypeInIl2Cpp<LegacyTextMetadataComponent>();
-    }
-
-    public ITextMetadata GetOrAttachTextMetadata(GameObject gameObject, out bool wasAttached)
-    {
-        var metadata = gameObject.GetComponent<TextMetadataComponent>();
-        wasAttached = metadata == null;
-        if (wasAttached)
-            metadata = gameObject.AddComponent<TextMetadataComponent>();
-        return metadata;
-    }
-
-    public ILegacyTextMetadata GetOrAttachLegacyTextMetadata(GameObject gameObject, out bool wasAttached)
-    {
-        var metadata = gameObject.GetComponent<LegacyTextMetadataComponent>();
-        wasAttached = metadata == null;
-        if (wasAttached)
-            metadata = gameObject.AddComponent<LegacyTextMetadataComponent>();
-        return metadata;
-    }
-
-    // UnityEngine.Object.FindObjectsOfType<T>() is generic, so like GetComponent<T>/
-    // AddComponent<T> above, it must be called from code compiled directly in this host project
-    // (against the real unhollowed assemblies) rather than from Shared, where it throws
-    // MissingMethodException at runtime.
-    public TextMeshProUGUI[] FindAllTextElements()
-    {
-        return UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();
-    }
-
-    public Text[] FindAllLegacyTextElements()
-    {
-        return UnityEngine.Object.FindObjectsOfType<Text>();
-    }
 }

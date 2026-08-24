@@ -36,7 +36,7 @@ public class TextResizerPlugin : BasePlugin
             return;
 
         _service = new TextResizerService(
-            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new Il2CppBehaviourAttacher());
+            _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new Il2CppElementFinder());
         _service.Awake();
 
         // BasePlugin (unlike Mono's BaseUnityPlugin) is a plain C# class - Unity never calls
@@ -60,10 +60,10 @@ public class TextResizerPlugin : BasePlugin
         // stubs used to compile FanslationStudio.Plugins.Shared can declare overloads that don't
         // actually exist here (see MissingMethodException for GetComponent(Type)/
         // FindObjectsOfType<T>() at runtime despite compiling fine against the stub).
-        LogAvailableMethods(typeof(Component), "GetComponent");
-        LogAvailableMethods(typeof(GameObject), "GetComponent");
-        LogAvailableMethods(typeof(UnityEngine.Object), "FindObjectsOfType");
-        LogAvailableMethods(typeof(UnityEngine.Object), "FindObjectOfType");
+        //LogAvailableMethods(typeof(Component), "GetComponent");
+        //LogAvailableMethods(typeof(GameObject), "GetComponent");
+        //LogAvailableMethods(typeof(UnityEngine.Object), "FindObjectsOfType");
+        //LogAvailableMethods(typeof(UnityEngine.Object), "FindObjectOfType");
     }
 
     private static void LogAvailableMethods(Type type, string namePrefix)
@@ -101,13 +101,9 @@ public class TextResizerPlugin : BasePlugin
             if (!_enabled)
                 return;
 
-            // TextMetadata/LegacyTextMetadata are custom MonoBehaviours added via AddComponent<T>/
-            // GetComponent<T> in TextResizerService. Under IL2CPP, custom managed types must be
-            // registered with Il2CppInterop before they can be used with AddComponent/GetComponent.
-            // Like Harmony patching (see EnsurePatched), this must be deferred until after at least
-            // one frame/scene has run - doing it in Load (too early) resolves Il2Cpp generic method
-            // tokens reentrantly and crashes the game with an AccessViolationException.
-            Il2CppBehaviourAttacher.EnsureRegistered();
+            // TextMetadata/LegacyTextMetadata are stored in plain dictionaries keyed by instance
+            // ID rather than attached as custom MonoBehaviour components - see
+            // TextMetadataComponents.cs/Il2CppElementFinder.cs. No registration step is needed.
             _service.EnsurePatched();
             TextResizerGameObjectPatches.EnsurePatched();
             _service.CheckForSceneChange();

@@ -18,14 +18,6 @@ public class SpriteReplacerServiceWrapper : SpriteReplacerService
     }
 }
 
-// Mono (BepInEx5) compiles directly against the real UnityEngine assemblies, so calling the
-// generic FindObjectsOfType<T>() here is safe - unlike Shared, which is compiled against the
-// Mono-style stub assemblies.
-public class MonoSpriteElementFinder : ISpriteElementFinder
-{
-    public UnityEngine.UI.Image[] FindAllElements() => UnityEngine.Object.FindObjectsOfType<UnityEngine.UI.Image>();
-}
-
 [BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.SpriteReplacer", "SpriteReplacer", MyPluginInfo.PLUGIN_VERSION)]
 public class SpriteReplacerPlugin : BaseUnityPlugin
 {
@@ -46,7 +38,7 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
             return;
 
         _service = new SpriteReplacerServiceWrapper(
-            new BepInEx5Logger(Logger), _enabled, Paths.BepInExRootPath, new YamlHelper(), new MonoSpriteElementFinder());
+            new BepInEx5Logger(Logger), _enabled, Paths.BepInExRootPath, new YamlHelper(), new MonoElementFinder());
         _service.Awake();
     }
 

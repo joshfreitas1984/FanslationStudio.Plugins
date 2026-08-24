@@ -166,21 +166,24 @@ public class SpriteReplacerService
             if (canvas == null)
                 continue;
 
-            // Get the screen rect of the text element
+            // Get the screen rect of the text element. RectTransformUtility.PixelAdjustRect()
+            // returns a rect in the canvas's local space, which for ScreenSpaceOverlay canvases
+            // is centered at (0,0) rather than starting at (0,0) like screen coordinates - using
+            // it directly here would never match the raw mouse screen position. Instead, always
+            // convert the element's world corners to screen space via
+            // RectTransformUtility.WorldToScreenPoint, which correctly handles a null camera for
+            // overlay canvases.
             var camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
-            var screenRect = RectTransformUtility.PixelAdjustRect(rectTransform, canvas);
 
-            // Convert the rect to screen coordinates if not in overlay mode
-            if (canvas.renderMode != RenderMode.ScreenSpaceOverlay && camera != null)
-            {
-                var corners = new Vector3[4];
-                rectTransform.GetWorldCorners(corners);
+            // rectTransform.GetWorldCorners(Vector3[]) throws MissingMethodException at
+            // runtime under IL2CPP when called from Shared - delegate to the host-specific
+            // finder (see ISpriteElementFinder/.github/copilot-instructions.md item 4).
+            var corners = _elementFinder.GetWorldCorners(rectTransform);
 
-                // Convert world corners to screen points
-                var min = camera.WorldToScreenPoint(corners[0]);
-                var max = camera.WorldToScreenPoint(corners[2]);
-                screenRect = new Rect(min.x, min.y, max.x - min.x, max.y - min.y);
-            }
+            // Convert world corners to screen points
+            var min = RectTransformUtility.WorldToScreenPoint(camera, corners[0]);
+            var max = RectTransformUtility.WorldToScreenPoint(camera, corners[2]);
+            var screenRect = new Rect(min.x, min.y, max.x - min.x, max.y - min.y);
 
             // Check if the cursor area overlaps with the text element's screen rect
             if (screenRect.Overlaps(cursorArea))
@@ -221,30 +224,10 @@ public class SpriteReplacerService
 
                 if (!File.Exists(spritePath))
                 {
-                    var texture = element.sprite.texture;
-                    byte[] bytes;
-
-                    if (texture.isReadable)
-                    {
-                        bytes = texture.GetRawTextureData();
-                    }
-                    else
-                    {
-                        // Create a temporary readable texture
-                        var readableTexture = new Texture2D(texture.width, texture.height, texture.format, false);
-                        var renderTexture = RenderTexture.GetTemporary(texture.width, texture.height);
-
-                        Graphics.Blit(texture, renderTexture);
-                        RenderTexture.active = renderTexture;
-                        readableTexture.ReadPixels(new Rect(0, 0, renderTexture.width, renderTexture.height), 0, 0);
-                        readableTexture.Apply();
-
-                        RenderTexture.active = null;
-                        RenderTexture.ReleaseTemporary(renderTexture);
-
-                        bytes = readableTexture.EncodeToPNG();
-                        UnityEngine.Object.Destroy(readableTexture);
-                    }
+                    // Texture2D/RenderTexture/Graphics.Blit calls are suspect under IL2CPP when
+                    // made from Shared - delegate to the host-specific finder (see
+                    // ISpriteElementFinder/.github/copilot-instructions.md item 4).
+                    var bytes = _elementFinder.GetExportableTextureBytes(element.sprite.texture);
 
                     if (bytes == null || bytes.Length == 0)
                     {
@@ -261,7 +244,7 @@ public class SpriteReplacerService
         }
 
         if (foundContracts.Count > 0)
-        {            
+        {
             var addedContractsFile = $"{_folder}/zzAdded.yaml";
             var newText = _yamlHelper.Serialize(foundContracts);
 
@@ -369,26 +352,13 @@ public class SpriteReplacerService
         try
         {
             var bytes = File.ReadAllBytes(spriteReplacementPath);
-            var originalTexture = image.sprite.texture;
 
-            // We use an uncompressed format to avoid issues with compression requiring specific sizes (eg. DXT1, DXT5, BC7, BC6H)
-            // Texture size doesn't matter, will be replaced by Unity in LoadImage to match texture
-            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-            texture.LoadImage(bytes);
-
-            // Ensure preserve aspect is on to avoid stretching issues where replacement sprite dimensions differ
+            // Texture2D/Sprite.Create calls are suspect under IL2CPP when made from Shared -
+            // delegate to the host-specific finder (see
+            // ISpriteElementFinder/.github/copilot-instructions.md item 4).
+            var sprite = image.sprite;
             image.preserveAspect = true;
-
-            // Ensure the rect fits within the new texture dimensions 
-            var rect = image.sprite.rect;
-            if (rect.width > texture.width || rect.height > texture.height)
-            {
-                _logger.LogWarning($"{spriteReplacementPath}: Texture dimensions are smaller than sprite rect, resizing");
-                rect.width = Mathf.Min(rect.width, texture.width);
-                rect.height = Mathf.Min(rect.height, texture.height);
-            }
-
-            image.sprite = Sprite.Create(texture, rect, image.sprite.pivot, image.sprite.pixelsPerUnit); ;
+            image.sprite = _elementFinder.CreateReplacementSprite(bytes, sprite.rect, sprite.pivot, sprite.pixelsPerUnit);
         }
         catch (Exception ex)
         {

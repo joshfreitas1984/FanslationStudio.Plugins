@@ -63,7 +63,7 @@ public class TextResizerService
     public void Awake()
     {
         if (!_enabled)
-            return; 
+            return;
 
         if (!Directory.Exists(_resizerFolder))
             Directory.CreateDirectory(_resizerFolder);
@@ -106,7 +106,7 @@ public class TextResizerService
             return;
 
         _lastSceneBuildIndex = activeScene.buildIndex;
-        _logger.LogMessage($"Scene loaded: {activeScene.name}, reapplying all resizers");
+        _logger.LogDebug($"Scene loaded: {activeScene.name}, reapplying all resizers");
         ApplyAllResizers();
     }
 
@@ -138,7 +138,7 @@ public class TextResizerService
     public void LoadResizers()
     {
         ResizersLoaded = false;
-        
+
         Resizers.Clear();
         CachedMatchedResizers.Clear();
         CompiledRegexCache.Clear();
@@ -180,6 +180,10 @@ public class TextResizerService
         // attacher rather than calling FindObjectsOfType<T>() directly - see FindAllTextElements.
         var textElements = FindAllTextElements();
 
+        // Temporary diagnostic logging to help track down why cursor-based lookup wasn't
+        // matching anything - remove once confirmed working.
+        _logger.LogDebug($"[CursorDebug] FindTextElementsUnderCursor: mouse=({x},{y}), cursorArea={cursorArea}, candidateCount={textElements.Length}");
+
         var responseElements = new List<TextMeshProUGUI>();
 
         foreach (TextMeshProUGUI textElement in textElements)
@@ -192,24 +196,30 @@ public class TextResizerService
             Canvas canvas = textElement.canvas;
             if (canvas == null) continue;
 
-            // Get the screen rect of the text element
+            // Get the screen rect of the text element. RectTransformUtility.PixelAdjustRect()
+            // returns a rect in the canvas's local space, which for ScreenSpaceOverlay canvases
+            // is centered at (0,0) rather than starting at (0,0) like screen coordinates - using
+            // it directly here would never match the raw mouse screen position. Instead, always
+            // convert the element's world corners to screen space via
+            // RectTransformUtility.WorldToScreenPoint, which correctly handles a null camera for
+            // overlay canvases.
             Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
-            Rect screenRect = RectTransformUtility.PixelAdjustRect(rectTransform, canvas);
 
-            // Convert the rect to screen coordinates if not in overlay mode
-            if (canvas.renderMode != RenderMode.ScreenSpaceOverlay && camera != null)
-            {
-                Vector3[] corners = new Vector3[4];
-                rectTransform.GetWorldCorners(corners);
+            // rectTransform.GetWorldCorners(Vector3[]) throws MissingMethodException at
+            // runtime under IL2CPP when called from Shared - delegate to the host-specific
+            // attacher (see IBehaviourAttacher/.github/copilot-instructions.md item 4).
+            Vector3[] corners = _behaviourAttacher.GetWorldCorners(rectTransform);
 
-                // Convert world corners to screen points
-                Vector2 min = camera.WorldToScreenPoint(corners[0]);
-                Vector2 max = camera.WorldToScreenPoint(corners[2]);
-                screenRect = new Rect(min.x, min.y, max.x - min.x, max.y - min.y);
-            }
+            // Convert world corners to screen points
+            Vector2 min = RectTransformUtility.WorldToScreenPoint(camera, corners[0]);
+            Vector2 max = RectTransformUtility.WorldToScreenPoint(camera, corners[2]);
+            Rect screenRect = new Rect(min.x, min.y, max.x - min.x, max.y - min.y);
+
+            var overlaps = screenRect.Overlaps(cursorArea);
+            _logger.LogDebug($"[CursorDebug] '{textElement.text}' canvas={canvas.name} renderMode={canvas.renderMode} camera={(camera == null ? "null" : camera.name)} corners0={corners[0]} corners2={corners[2]} screenRect={screenRect} overlaps={overlaps}");
 
             // Check if the cursor area overlaps with the text element's screen rect
-            if (screenRect.Overlaps(cursorArea))
+            if (overlaps)
                 responseElements.Add(textElement);
         }
 
@@ -225,6 +235,10 @@ public class TextResizerService
         // than calling FindObjectsOfType<T>() directly - see FindAllLegacyTextElements.
         var textElements = FindAllLegacyTextElements();
 
+        // Temporary diagnostic logging to help track down why cursor-based lookup wasn't
+        // matching anything - remove once confirmed working.
+        _logger.LogDebug($"[CursorDebug] FindLegacyTextElementsUnderCursor: mouse=({x},{y}), cursorArea={cursorArea}, candidateCount={textElements.Length}");
+
         var responseElements = new List<Text>();
 
         foreach (Text textElement in textElements)
@@ -237,24 +251,26 @@ public class TextResizerService
             Canvas canvas = textElement.canvas;
             if (canvas == null) continue;
 
-            // Get the screen rect of the text element
+            // Get the screen rect of the text element. See the comment in
+            // FindTextElementsUnderCursor above for why we always convert via world corners
+            // rather than using PixelAdjustRect's canvas-local-space rect directly.
             Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
-            Rect screenRect = RectTransformUtility.PixelAdjustRect(rectTransform, canvas);
 
-            // Convert the rect to screen coordinates if not in overlay mode
-            if (canvas.renderMode != RenderMode.ScreenSpaceOverlay && camera != null)
-            {
-                Vector3[] corners = new Vector3[4];
-                rectTransform.GetWorldCorners(corners);
+            // rectTransform.GetWorldCorners(Vector3[]) throws MissingMethodException at
+            // runtime under IL2CPP when called from Shared - delegate to the host-specific
+            // attacher (see IBehaviourAttacher/.github/copilot-instructions.md item 4).
+            Vector3[] corners = _behaviourAttacher.GetWorldCorners(rectTransform);
 
-                // Convert world corners to screen points
-                Vector2 min = camera.WorldToScreenPoint(corners[0]);
-                Vector2 max = camera.WorldToScreenPoint(corners[2]);
-                screenRect = new Rect(min.x, min.y, max.x - min.x, max.y - min.y);
-            }
+            // Convert world corners to screen points
+            Vector2 min = RectTransformUtility.WorldToScreenPoint(camera, corners[0]);
+            Vector2 max = RectTransformUtility.WorldToScreenPoint(camera, corners[2]);
+            Rect screenRect = new Rect(min.x, min.y, max.x - min.x, max.y - min.y);
+
+            var overlaps = screenRect.Overlaps(cursorArea);
+            _logger.LogDebug($"[CursorDebug] '{textElement.text}' canvas={canvas.name} renderMode={canvas.renderMode} camera={(camera == null ? "null" : camera.name)} corners0={corners[0]} corners2={corners[2]} screenRect={screenRect} overlaps={overlaps}");
 
             // Check if the cursor area overlaps with the text element's screen rect
-            if (screenRect.Overlaps(cursorArea))
+            if (overlaps)
                 responseElements.Add(textElement);
         }
 
@@ -283,7 +299,7 @@ public class TextResizerService
         {
             // Log information about the text element
             var path = ObjectHelper.GetGameObjectPath(textElement.gameObject);
-            //Logger.LogMessage($"Found text element: {path}");
+            //Logger.LogDebug($"Found text element: {path}");
 
             if (!Resizers.ContainsKey(path))
             {
@@ -321,7 +337,7 @@ public class TextResizerService
         }
         else
         {
-            _logger.LogMessage("No new TextMeshProUGUI elements found in scene");
+            _logger.LogDebug("No new TextMeshProUGUI elements found in scene");
         }
     }
 
@@ -351,7 +367,7 @@ public class TextResizerService
         }
 
         if (foundResizers.Count > 0)
-        {            
+        {
             var addedResizersFile = $"{_resizerFolder}/zzAddedResizers.yaml";
             var newText = _yamlHelper.Serialize(foundResizers);
 
@@ -366,7 +382,7 @@ public class TextResizerService
         }
         else
         {
-            _logger.LogMessage("No new UI.Text elements found in scene");
+            _logger.LogDebug("No new UI.Text elements found in scene");
         }
     }
 

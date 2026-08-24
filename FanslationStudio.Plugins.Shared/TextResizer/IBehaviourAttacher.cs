@@ -27,5 +27,11 @@ public interface IBehaviourAttacher
     // Same reason as FindAllTextElements above - generic FindObjectsOfType<T>() call, must be
     // implemented per-host.
     Text[] FindAllLegacyTextElements();
+
+    // RectTransform.GetWorldCorners(Vector3[]) throws MissingMethodException at runtime under
+    // IL2CPP when called from code compiled in Shared, even though the method exists in the
+    // game's real assembly - see .github/copilot-instructions.md item 4. Must be implemented
+    // per-host.
+    Vector3[] GetWorldCorners(RectTransform rectTransform);
 }
 

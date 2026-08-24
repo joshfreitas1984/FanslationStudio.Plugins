@@ -1,8 +1,8 @@
 ﻿using BepInEx;
+using BepInEx.Unity.Mono;
 using FanslationStudio.Plugins.DynamicStrings;
 using FanslationStudio.Plugins.PrefabText;
 using FanslationStudio.Plugins.Shared;
-using System.IO;
 using UnityEngine;
 
 namespace FanslationStudio.Plugins.Plugins;
@@ -25,7 +25,8 @@ public class PrefabTextDumperServiceWrapper : PrefabTextDumperService
 [BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.PrefabTextDumperPlugin", "PrefabTextDumperPlugin", MyPluginInfo.PLUGIN_VERSION)]
 public class PrefabTextDumperPlugin : BaseUnityPlugin
 {
-    public PrefabTextDumperServiceWrapper PrefabTextDumper;
+    private static IPluginLogger _logger;
+    private static PrefabTextDumperServiceWrapper _service;
     private readonly KeyCode _dumpHotkey = KeyCode.F4;
 
     private void Awake()
@@ -37,24 +38,20 @@ public class PrefabTextDumperPlugin : BaseUnityPlugin
         var dumpFiles = Config.Bind("General", "DumpFilePath", "./dumpeddata",
             "File to dump the dynamic strings to").Value;
 
-        // BepInEx.Core 5.x's Paths class doesn't expose GameDataPath (added in later BepInEx.Core
-        // versions used by the other hosts), so derive it here instead. Safe to go up one level
-        // from ManagedPath under Mono - it always ends in a "Managed" subfolder of the game's
-        // "*_Data" folder, unlike IL2CPP where ManagedPath points directly at "*_Data".
-        var gameDataPath = Path.GetFullPath(Path.Combine(Paths.ManagedPath, ".."));
-        PrefabTextDumper = new PrefabTextDumperServiceWrapper(new BepInEx5Logger(base.Logger), dumpFiles, regexPattern, enabled,
-            gameDataPath, Paths.BepInExRootPath, new MonoElementFinder());
-        PrefabTextDumper.Awake();
+        _logger = new BepInEx6Logger(base.Logger);
+        _service = new PrefabTextDumperServiceWrapper(_logger, dumpFiles, regexPattern, enabled,
+            Paths.GameDataPath, Paths.BepInExRootPath, new MonoElementFinder());
+        _service.Awake();
     }
 
     // Dumping at Awake() runs before most of the game's assets/scenes have loaded, so it tends to
     // find very little. Poll a hotkey instead so it can be triggered manually once further along.
     private void Update()
     {
-        if (PrefabTextDumper == null || !PrefabTextDumperService.Enabled)
+        if (_service == null || !PrefabTextDumperService.Enabled)
             return;
 
         if (UnityInput.Current.GetKeyDown(_dumpHotkey))
-            PrefabTextDumper.DumpAllPrefabTexts();
+            _service.DumpAllPrefabTexts();
     }
 }

@@ -1,7 +1,6 @@
 using FanslationStudio.Plugins.TextResizer;
 using TMPro;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace FanslationStudio.Plugins.Plugins;
 
@@ -58,35 +57,4 @@ public class LegacyTextMetadataComponent : MonoBehaviour, ILegacyTextMetadata
     public float AdjustY { get; set; }
     public float AdjustWidth { get; set; }
     public float AdjustHeight { get; set; }
-}
-
-public class MonoBehaviourAttacher : IBehaviourAttacher
-{
-    public ITextMetadata GetOrAttachTextMetadata(GameObject gameObject, out bool wasAttached)
-    {
-        var metadata = gameObject.GetComponent<TextMetadataComponent>();
-        wasAttached = metadata == null;
-        if (wasAttached)
-            metadata = gameObject.AddComponent<TextMetadataComponent>();
-        return metadata;
-    }
-
-    public ILegacyTextMetadata GetOrAttachLegacyTextMetadata(GameObject gameObject, out bool wasAttached)
-    {
-        var metadata = gameObject.GetComponent<LegacyTextMetadataComponent>();
-        wasAttached = metadata == null;
-        if (wasAttached)
-            metadata = gameObject.AddComponent<LegacyTextMetadataComponent>();
-        return metadata;
-    }
-
-    public TextMeshProUGUI[] FindAllTextElements()
-    {
-        return UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();
-    }
-
-    public Text[] FindAllLegacyTextElements()
-    {
-        return UnityEngine.Object.FindObjectsOfType<Text>();
-    }
 }

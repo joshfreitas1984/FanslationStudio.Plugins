@@ -8,7 +8,6 @@
 
 //namespace FanslationStudio.Plugins.PrefabText;
 
-//[BepInPlugin($"{MyPluginInfo.PLUGIN_GUID}.TextReplacer", "TextReplacer", MyPluginInfo.PLUGIN_VERSION)]
 ////[BepInDependency("gravydevsupreme.xunity.resourceredirector")]
 //public class TextReplacerPlugin : BaseUnityPlugin
 //{

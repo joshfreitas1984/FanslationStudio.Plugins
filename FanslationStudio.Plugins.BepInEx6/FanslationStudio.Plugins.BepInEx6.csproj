@@ -58,6 +58,9 @@
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.CoreModule.dll</HintPath>
     </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.AssetBundleModule.dll</HintPath>
+    </Reference>
     <Reference Include="UnityEngine.UIModule">
       <HintPath>..\..\FanslationStudio.Plugins\Reference\UnityEngine.UIModule.dll</HintPath>
     </Reference>
