@@ -29,7 +29,7 @@ public class PrefabTextDumperPlugin : BasePlugin
 {
     private static IPluginLogger _logger;
     private static PrefabTextDumperServiceWrapper _service;
-    private static readonly KeyboardShortcut DumpHotkey = new(KeyCode.Keypad4);
+    private static readonly KeyboardShortcut DumpHotkey = new(KeyCode.KeypadPeriod);
 
     public override void Load()
     {

@@ -10,7 +10,7 @@ namespace FanslationStudio.Plugins.SharpYaml;
 /// <summary>
 /// Provides factory methods for creating YAML serializers with custom settings.
 /// </summary>
-public class YamlHelper: IYamlHelper
+public class YamlHelper : IYamlHelper
 {
     public static Serializer Serializer = CreateSerializer();
 
@@ -27,7 +27,18 @@ public class YamlHelper: IYamlHelper
             EmitTags = false,
             SortKeyForMapping = false,
             ComparerForKeySorting = null,
-            ObjectSerializerBackend = new DefaultValueExcludingBackend()
+            ObjectSerializerBackend = new DefaultValueExcludingBackend(),
+            // Disable YAML anchor/alias (&oN / *oN) emission. Our data is always a flat list of
+            // independent, self-contained contracts with no intentional shared references. With
+            // this left enabled, the static `Serializer` instance below is reused for every
+            // Serialize() call, but SharpYaml's alias-tracking dictionary is only cleared when
+            // ResetAlias=true (default false) - and its anchor counter (o0, o1, ...) restarts
+            // from zero on every call. So re-serializing the same long-lived contract objects
+            // (e.g. from RewriteFile after a save) makes previously-seen instances get emitted as
+            // bare `*oN` aliases that reference an anchor never defined in the current document,
+            // silently corrupting the output (e.g. duplicate/blank-looking entries after saving
+            // from the editor UI). EmitAlias=false avoids the whole hazard.
+            EmitAlias = false
         };
 
         return new Serializer(settings);

@@ -44,6 +44,8 @@ internal class TextResizerPlugin : BaseUnityPlugin
              new BepInEx5Logger(Logger),
              _enabled, Paths.BepInExRootPath, new YamlHelper());
         _service.Awake();
+
+        TextResizerEditorUi.Configure(_service);
     }
 
     internal void Update()
@@ -58,13 +60,21 @@ internal class TextResizerPlugin : BaseUnityPlugin
             _service.Reload();
 
         if (UnityInput.Current.GetKeyDown(_addResizerHotKey))
+        {
             _service.AddResizersForScene();
+            TextResizerEditorUi.Open();
+        }
 
         var x = UnityInput.Current.mousePosition.x;
         var y = UnityInput.Current.mousePosition.y;
         var z = UnityInput.Current.mousePosition.z;
 
         if (UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey))
+        {
             _service.AddResizersAtCursor(x, y, z);
+            TextResizerEditorUi.Open();
+        }
+
+        TextResizerEditorUi.Tick();
     }
 }

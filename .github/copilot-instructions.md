@@ -135,6 +135,47 @@ application only needs ordinary `MethodInfo` resolution + an IL detour — it do
 `UnityEngine.Time.deltaTime`'s getter with a postfix, throttled to once per frame via
 `Time.frameCount` (since `deltaTime` may be read many times per frame by other game code).
 
+## Confirmed-safe pattern for building real uGUI at runtime under IL2CPP (spike, 2026-08-29)
+
+A dedicated spike (`UiSpikePlugin.cs` in `BepInEx6.IL2CPP`, since removed — see git history if it
+needs to be resurrected) confirmed that a full interactive uGUI hierarchy can be built at runtime
+under this game's IL2CPP build, **without** any `AddComponent<T>()`/`ClassInjector` generic-interop
+calls. Confirmed working end-to-end (rendered, clickable, typeable, verified in-game with a
+screenshot): `Canvas`, `CanvasScaler`, `GraphicRaycaster`, `Image`, `Text` (legacy), `InputField`,
+`EventSystem`, `StandaloneInputModule`.
+
+Key points for building on this:
+- Use `gameObject.AddComponent(Il2CppType.From(typeof(BuiltInType)))` — the **non-generic**
+  overload — for any built-in Unity/uGUI component type. This is safe because built-in types
+  already have generated Il2Cpp classes; no `ClassInjector` registration is needed (that's only
+  ever required for *custom* C# `MonoBehaviour`-derived types, which remains unsafe — see the
+  "Confirmed-unsafe patterns" section above, item 2).
+- **Do not use C#'s `as T` to downcast the result of `AddComponent(Il2CppType)`** — it silently
+  returns `null` even when the component was created successfully (confirmed: `Step 2 raw result:
+  component != null = True, ... GetIl2CppType()=UnityEngine.Canvas`, but `as Canvas` still gave
+  `null`). Always use `.TryCast<T>()` (or `.Cast<T>()` if you want it to throw on mismatch)
+  instead. This applies to `transform as RectTransform` too — use `transform.TryCast<RectTransform>()`.
+- Legacy `Text` components render **nothing at all, with no error**, if no `Font` is assigned —
+  confirmed by the first in-game screenshot (panel background rendered, label text did not).
+  Fetch a built-in font via the non-generic `Resources.GetBuiltinResource(Il2CppType.From(typeof(Font)),
+  "Arial.ttf")` (again `.TryCast<Font>()`, not `as Font`) and assign it to every `Text.font`
+  before expecting anything to show up.
+- `InputField`/other interactive uGUI elements need an `EventSystem` + `StandaloneInputModule` in
+  the scene to receive clicks/keyboard input at all (rendering works fine without one, but nothing
+  is clickable). Check via `UnityEngine.Object.FindObjectOfType(Il2CppType.From(typeof(EventSystem)))`
+  first — most games already have one — and only create a fallback
+  (`AddComponent(Il2CppType.From(typeof(EventSystem)))` +
+  `AddComponent(Il2CppType.From(typeof(StandaloneInputModule)))`) if none exists.
+- Deferred creation (behind a hotkey, ticked via the `Time.deltaTime` postfix trick above — never
+  from `Load()`) was used for the spike, consistent with every other "first use of interop after
+  native reentrancy" caution elsewhere in this file. Not yet proven whether creating this UI
+  earlier (e.g. first tick after `Load()`) is equally safe — stick to the deferred/hotkey-gated
+  pattern until proven otherwise.
+- Not yet tested: whether `InputField`'s displayed/typed text color defaults to something hard to
+  read (observed: input text rendered in black by default, only really visible against the
+  input box's own light background — set `Text.color` explicitly per element rather than relying
+  on defaults).
+
 ## Debugging tips specific to this repo
 
 - To inspect the real available API surface of the game's unhollowed assemblies (not the Mono

@@ -18,7 +18,7 @@ public class TextResizerPlugin : BasePlugin
     private static TextResizerService _service;
     private static bool _enabled = true;
 
-    private static readonly KeyboardShortcut AddResizerAtCursorHotKey = new(KeyCode.KeypadMinus);
+    private static readonly KeyboardShortcut AddResizerAtCursorHotKey = new(KeyCode.KeypadDivide);
     private static readonly KeyboardShortcut ReloadHotkey = new(KeyCode.KeypadPlus);
     private static readonly KeyboardShortcut AddResizerHotKey = new(KeyCode.KeypadMultiply);
 
@@ -38,6 +38,8 @@ public class TextResizerPlugin : BasePlugin
         _service = new TextResizerService(
             _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new Il2CppElementFinder());
         _service.Awake();
+
+        TextResizerEditorUi.Configure(_service);
 
         // BasePlugin (unlike Mono's BaseUnityPlugin) is a plain C# class - Unity never calls
         // Update() on it directly. Every attempt to get a tick via a *generic* Il2Cpp interop
@@ -112,14 +114,22 @@ public class TextResizerPlugin : BasePlugin
                 _service.Reload();
 
             if (AddResizerHotKey.IsDown())
+            {
                 _service.AddResizersForScene();
+                TextResizerEditorUi.Open();
+            }
 
             var x = UnityInput.Current.mousePosition.x;
             var y = UnityInput.Current.mousePosition.y;
             var z = UnityInput.Current.mousePosition.z;
 
             if (AddResizerAtCursorHotKey.IsDown())
+            {
                 _service.AddResizersAtCursor(x, y, z);
+                TextResizerEditorUi.Open();
+            }
+
+            TextResizerEditorUi.Tick();
         }
         catch (Exception ex)
         {

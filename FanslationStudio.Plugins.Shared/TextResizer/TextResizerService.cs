@@ -4,6 +4,7 @@ using HarmonyLib;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using TMPro;
 using UnityEngine;
@@ -21,6 +22,18 @@ public class TextResizerService
     // Required Static for patches to see it
     public static bool ResizersLoaded = false;
     public static Dictionary<string, TextResizerContract> Resizers = [];
+
+    // Incremented whenever a resizer is added, removed, or renamed (i.e. whenever the set of keys
+    // in Resizers changes) - never on in-place edits (PreviewResizer/typing). The editor UI polls
+    // this each frame to detect resizers added out-of-band via hotkeys (AddResizersForScene/
+    // AddResizersAtCursor) or Reload, and refreshes its list without needing to be closed/reopened.
+    public static int ResizersVersion = 0;
+
+    // Tracks which yaml file each resizer came from (an absolute file path), so edits/deletes
+    // made via the editor UI rewrite the correct file instead of always appending to
+    // zzAddedResizers.yaml. Resizers found across multiple files are supported - each file is
+    // rewritten independently based on which resizer paths currently point at it.
+    public static Dictionary<string, string> ResizerSourceFiles = [];
 
     // Cache for storing previously matched results
     public static Dictionary<string, TextResizerContract> CachedMatchedResizers = [];
@@ -140,6 +153,7 @@ public class TextResizerService
         ResizersLoaded = false;
 
         Resizers.Clear();
+        ResizerSourceFiles.Clear();
         CachedMatchedResizers.Clear();
         CompiledRegexCache.Clear();
 
@@ -153,7 +167,7 @@ public class TextResizerService
                     continue;
 
                 var newResizers = _yamlHelper.Deserialize<List<TextResizerContract>>(content);
-                AddFoundResizers(newResizers);
+                AddFoundResizers(newResizers, file);
             }
             catch (Exception ex)
             {
@@ -164,11 +178,124 @@ public class TextResizerService
         ResizersLoaded = true;
     }
 
-    private void AddFoundResizers(List<TextResizerContract> newResizers)
+    private void AddFoundResizers(List<TextResizerContract> newResizers, string sourceFile)
     {
         foreach (var newResizer in newResizers)
+        {
             if (!Resizers.ContainsKey(newResizer.Path))
+            {
                 Resizers.Add(newResizer.Path, newResizer);
+                ResizerSourceFiles[newResizer.Path] = sourceFile;
+                ResizersVersion++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns all currently-loaded resizers, sorted by path, for display in the editor UI.
+    /// </summary>
+    public static List<TextResizerContract> GetAllResizers()
+    {
+        return Resizers.Values.OrderBy(r => r.Path, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// Applies an in-memory-only change to a resizer (no file write) and immediately reapplies
+    /// all resizers, so an in-progress edit is visible on screen right away. Used by the editor
+    /// UI while the user is still editing a resizer, before they explicitly click Save.
+    /// </summary>
+    public void PreviewResizer(TextResizerContract contract)
+    {
+        Resizers[contract.Path] = contract;
+        CachedMatchedResizers.Clear();
+        CompiledRegexCache.Clear();
+        ApplyAllResizers();
+    }
+
+    /// <summary>
+    /// Creates or updates a resizer, rewrites the owning yaml file (or zzAddedResizers.yaml for
+    /// brand new resizers), and immediately re-applies all resizers so the change is visible on
+    /// screen without needing a scene reload.
+    /// </summary>
+    /// <param name="contract">The resizer to save, with its final (possibly edited) Path.</param>
+    /// <param name="previousPath">
+    /// If the editor UI let the user edit Path (e.g. to add wildcards), pass the path the
+    /// resizer was originally loaded/selected under so the old dictionary key is removed instead
+    /// of leaving a stale duplicate entry behind. Pass null/omit for a normal in-place save.
+    /// </param>
+    public void SaveResizer(TextResizerContract contract, string previousPath = null)
+    {
+        var isRename = !string.IsNullOrEmpty(previousPath) && previousPath != contract.Path;
+        string previousFile = null;
+
+        if (isRename && ResizerSourceFiles.TryGetValue(previousPath, out previousFile))
+        {
+            Resizers.Remove(previousPath);
+            ResizerSourceFiles.Remove(previousPath);
+        }
+
+        Resizers[contract.Path] = contract;
+        ResizersVersion++;
+        CachedMatchedResizers.Clear();
+        CompiledRegexCache.Clear();
+
+        if (!ResizerSourceFiles.TryGetValue(contract.Path, out var file))
+        {
+            file = previousFile ?? Path.Combine(_resizerFolder, "zzAddedResizers.yaml");
+            ResizerSourceFiles[contract.Path] = file;
+        }
+
+        RewriteFile(file);
+        if (isRename && previousFile != null && previousFile != file)
+            RewriteFile(previousFile);
+
+        ApplyAllResizers();
+
+        _logger.LogWarning($"Saved resizer '{contract.Path}' to '{file}'");
+    }
+
+    /// <summary>
+    /// Removes a resizer, rewrites the owning yaml file to drop it, and reverts any matching
+    /// on-screen elements back to their originally-captured values.
+    /// </summary>
+    public void DeleteResizer(string path)
+    {
+        if (!Resizers.ContainsKey(path))
+            return;
+
+        Resizers.Remove(path);
+        ResizerSourceFiles.Remove(path, out var sourceFile);
+        ResizersVersion++;
+        CachedMatchedResizers.Clear();
+        CompiledRegexCache.Clear();
+
+        if (sourceFile != null)
+            RewriteFile(sourceFile);
+
+        foreach (var textElement in FindAllTextElements())
+            if (ObjectHelper.GetGameObjectPath(textElement.gameObject) == path)
+                RevertToOriginal(textElement);
+
+        foreach (var textElement in FindAllLegacyTextElements())
+            if (ObjectHelper.GetGameObjectPath(textElement.gameObject) == path)
+                RevertLegacyToOriginal(textElement);
+
+        _logger.LogWarning($"Deleted resizer '{path}'");
+    }
+
+    // Rewrites a single yaml file from scratch based on the resizers currently mapped to it in
+    // ResizerSourceFiles - never appends raw serialized text (the previous approach in
+    // AddTextElementsToResizers/AddLegacyTextElementsToResizers), since blind string appends to a
+    // yaml list can produce invalid/duplicate documents and can't support in-place edits/deletes.
+    private void RewriteFile(string file)
+    {
+        var entries = ResizerSourceFiles
+            .Where(kv => kv.Value == file)
+            .Select(kv => Resizers[kv.Key])
+            .ToList();
+
+        var content = entries.Count > 0 ? _yamlHelper.Serialize(entries) : string.Empty;
+        File.WriteAllText(file, content);
     }
 
     public TextMeshProUGUI[] FindTextElementsUnderCursor(float x, float y, float z)
@@ -323,17 +450,12 @@ public class TextResizerService
 
         if (foundResizers.Count > 0)
         {
-            var addedResizersFile = $"{_resizerFolder}/zzAddedResizers.yaml";
-            var newText = _yamlHelper.Serialize(foundResizers);
+            var addedResizersFile = Path.Combine(_resizerFolder, "zzAddedResizers.yaml");
 
             _logger.LogWarning($"Writing to {addedResizersFile}");
 
-            if (!File.Exists(addedResizersFile))
-                File.WriteAllText(addedResizersFile, newText);
-            else
-                File.AppendAllText(addedResizersFile, newText);
-
-            AddFoundResizers(foundResizers);
+            AddFoundResizers(foundResizers, addedResizersFile);
+            RewriteFile(addedResizersFile);
         }
         else
         {
@@ -368,17 +490,12 @@ public class TextResizerService
 
         if (foundResizers.Count > 0)
         {
-            var addedResizersFile = $"{_resizerFolder}/zzAddedResizers.yaml";
-            var newText = _yamlHelper.Serialize(foundResizers);
+            var addedResizersFile = Path.Combine(_resizerFolder, "zzAddedResizers.yaml");
 
             _logger.LogWarning($"Writing to {addedResizersFile}");
 
-            if (!File.Exists(addedResizersFile))
-                File.WriteAllText(addedResizersFile, newText);
-            else
-                File.AppendAllText(addedResizersFile, newText);
-
-            AddFoundResizers(foundResizers);
+            AddFoundResizers(foundResizers, addedResizersFile);
+            RewriteFile(addedResizersFile);
         }
         else
         {
@@ -579,6 +696,54 @@ public class TextResizerService
         }
     }
 
+    /// <summary>
+    /// Reverts a TextMeshProUGUI element back to the values captured before any resizer was
+    /// ever applied to it. Used by DeleteResizer so removing a resizer takes visible effect
+    /// immediately, instead of only affecting the next OnEnable/text change. No-op if the
+    /// element never had a resizer applied (no metadata captured yet).
+    /// </summary>
+    public static void RevertToOriginal(TextMeshProUGUI textComponent)
+    {
+        if (textComponent == null || textComponent.gameObject == null)
+            return;
+
+        var metadata = _behaviourAttacher.GetOrAttachTextMetadata(textComponent.gameObject, out var wasAttached);
+        if (wasAttached)
+            return;
+
+        try
+        {
+            _isApplyingResizer = true;
+
+            var rectTransform = textComponent.rectTransform;
+            rectTransform.anchoredPosition = new Vector2(metadata.OriginalX, metadata.OriginalY);
+            rectTransform.sizeDelta = new Vector2(metadata.OriginalWidth, metadata.OriginalHeight);
+
+            textComponent.fontSize = metadata.OriginalFontSize;
+            textComponent.alignment = metadata.OriginalAlignment;
+            textComponent.overflowMode = metadata.OriginalOverflowMode;
+            textComponent.enableWordWrapping = metadata.OriginalAllowWordWrap;
+            textComponent.enableAutoSizing = metadata.OriginalAllowAutoSizing;
+            textComponent.lineSpacing = metadata.OriginalLineSpacing;
+            textComponent.characterSpacing = metadata.OriginalCharacterSpacing;
+            textComponent.wordSpacing = metadata.OriginalWordSpacing;
+
+            metadata.ActiveResizerPath = null;
+            metadata.AdjustX = 0;
+            metadata.AdjustY = 0;
+            metadata.AdjustWidth = 0;
+            metadata.AdjustHeight = 0;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error reverting resizer for {textComponent.name}: {ex}");
+        }
+        finally
+        {
+            _isApplyingResizer = false;
+        }
+    }
+
     public static void ApplyResizingToLegacyText(Text textComponent)
     {
         if (textComponent == null)
@@ -743,6 +908,53 @@ public class TextResizerService
         catch (Exception ex)
         {
             _logger.LogError($"Error applying resizer to legacy text {textComponent.name}: {ex}");
+        }
+        finally
+        {
+            _isApplyingResizer = false;
+        }
+    }
+
+    /// <summary>
+    /// Reverts a legacy Text element back to the values captured before any resizer was ever
+    /// applied to it. See RevertToOriginal (TMP variant) for why this exists. No-op if the
+    /// element never had a resizer applied (no metadata captured yet).
+    /// </summary>
+    public static void RevertLegacyToOriginal(Text textComponent)
+    {
+        if (textComponent == null || textComponent.gameObject == null)
+            return;
+
+        var metadata = _behaviourAttacher.GetOrAttachLegacyTextMetadata(textComponent.gameObject, out var wasAttached);
+        if (wasAttached)
+            return;
+
+        try
+        {
+            _isApplyingResizer = true;
+
+            var rectTransform = textComponent.rectTransform;
+            rectTransform.anchoredPosition = new Vector2(metadata.OriginalX, metadata.OriginalY);
+            rectTransform.sizeDelta = new Vector2(metadata.OriginalWidth, metadata.OriginalHeight);
+
+            textComponent.fontSize = metadata.OriginalFontSize;
+            textComponent.alignment = metadata.OriginalAlignment;
+            textComponent.horizontalOverflow = metadata.OriginalHorizontalOverflow;
+            textComponent.verticalOverflow = metadata.OriginalVerticalOverflow;
+            textComponent.lineSpacing = metadata.OriginalLineSpacing;
+            textComponent.resizeTextForBestFit = metadata.OriginalResizeTextForBestFit;
+            textComponent.resizeTextMinSize = metadata.OriginalResizeTextMinSize;
+            textComponent.resizeTextMaxSize = metadata.OriginalResizeTextMaxSize;
+
+            metadata.ActiveResizerPath = null;
+            metadata.AdjustX = 0;
+            metadata.AdjustY = 0;
+            metadata.AdjustWidth = 0;
+            metadata.AdjustHeight = 0;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error reverting resizer for legacy text {textComponent.name}: {ex}");
         }
         finally
         {

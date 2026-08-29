@@ -1,27 +1,27 @@
-- path: "FpsDisplay/Text"
-  idealFontSize: 20
+- path: FpsDisplay/Text
+  idealFontSize: 20.0
   allowWordWrap: true
-- path: "UI/Layer_1/CommunityLink/Text"
-  sampleText: "player community"
-  idealFontSize: 35
+- path: UI/Layer_1/CommunityLink/Text
+  sampleText: player community
+  idealFontSize: 35.0
   allowWordWrap: true
-- path: "UI/Layer_1/Buttons/StartGame/Text"
-  sampleText: "Setting off"
-  idealFontSize: 30
+- path: UI/Layer_1/Buttons/StartGame/Text
+  sampleText: Setting off
+  idealFontSize: 30.0
   allowWordWrap: false
-- path: "UI/Layer_1/AppVersion"
-  sampleText: "release_1.0.5000.13, mods: English"
-  idealFontSize: 19
+- path: UI/Layer_1/AppVersion
+  sampleText: 'release_1.0.5000.13, mods: English'
+  idealFontSize: 19.0
   allowWordWrap: true
-- path: "UI/Layer_1/Buttons/Quit/Text"
-  sampleText: "Retreat to the wilderness"
-  idealFontSize: 30
+- path: UI/Layer_1/Buttons/Quit/Text
+  sampleText: Retreat to the wilderness
+  idealFontSize: 30.0
   allowWordWrap: false
-- path: "UI/Layer_1/Buttons/Library/Text"
-  sampleText: "Sermon Hall"
-  idealFontSize: 30
+- path: UI/Layer_1/Buttons/Library/Text
+  sampleText: Sermon Hall
+  idealFontSize: 30.0
   allowWordWrap: false
-- path: "UI/Layer_1/Buttons/Setting/Text"
-  sampleText: "Settings"
-  idealFontSize: 30
+- path: UI/Layer_1/Buttons/Setting/Text
+  sampleText: Settings
+  idealFontSize: 30.0
   allowWordWrap: false

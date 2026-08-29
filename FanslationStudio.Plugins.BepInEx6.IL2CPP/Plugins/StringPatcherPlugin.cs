@@ -31,7 +31,7 @@ public class StringPatcherPlugin : BasePlugin
         var resourcePath = Config.Bind("General", "ResourcePath", "./english",
             "File to dump the dynamic strings to").Value;
 
-        StringPatcherService = new StringPatcherService(new BepInEx6Logger(base.Log), 
+        StringPatcherService = new StringPatcherService(new BepInEx6Logger(base.Log),
             _enabled,
             new Harmony($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher"),
             resourcePath,
@@ -43,8 +43,8 @@ public class StringPatcherPlugin : BasePlugin
         // BasePlugin (unlike Mono's BaseUnityPlugin) is a plain C# class - Unity never calls
         // Update() on it directly. Attach a registered MonoBehaviour component to receive
         // Update() ticks and drive EnsurePatched().
-        if (!ClassInjector.IsTypeRegisteredInIl2Cpp<StringPatcherUpdater>())
-            ClassInjector.RegisterTypeInIl2Cpp<StringPatcherUpdater>();
+        // if (!ClassInjector.IsTypeRegisteredInIl2Cpp<StringPatcherUpdater>())
+        //     ClassInjector.RegisterTypeInIl2Cpp<StringPatcherUpdater>();
         AddComponent<StringPatcherUpdater>();
     }
 

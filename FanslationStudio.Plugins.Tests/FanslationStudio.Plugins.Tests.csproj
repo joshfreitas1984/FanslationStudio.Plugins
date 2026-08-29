@@ -20,6 +20,30 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Mono-style stub assemblies used only so this project can compile a no-op
+         IBehaviourAttacher implementation (TextMeshProUGUI[]/Text[] return types) to
+         instantiate TextResizerService in tests, without needing a real Unity runtime. -->
+    <Reference Include="UnityEngine">
+      <HintPath>..\Reference\UnityEngine.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>..\Reference\UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>..\Reference\UnityEngine.UIModule.dll</HintPath>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>..\Reference\Unity.TextMeshPro.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>..\Reference\UnityEngine.UI.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>..\Reference\UnityEngine.TextRenderingModule.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 

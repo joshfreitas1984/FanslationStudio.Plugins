@@ -39,8 +39,8 @@ public class SpriteReplacerPlugin : BasePlugin
         // BasePlugin (unlike Mono's BaseUnityPlugin) is a plain C# class - Unity never calls
         // Update() on it directly. Attach a registered MonoBehaviour component to receive
         // Update() ticks and drive the hotkey polling.
-        if (!ClassInjector.IsTypeRegisteredInIl2Cpp<SpriteReplacerUpdater>())
-            ClassInjector.RegisterTypeInIl2Cpp<SpriteReplacerUpdater>();
+        // if (!ClassInjector.IsTypeRegisteredInIl2Cpp<SpriteReplacerUpdater>())
+        //     ClassInjector.RegisterTypeInIl2Cpp<SpriteReplacerUpdater>();
         AddComponent<SpriteReplacerUpdater>();
     }
 
