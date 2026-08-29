@@ -111,11 +111,11 @@ public class TextResizerServiceSaveDeleteTests
     }
 
     [Fact]
-    public void GetAllResizers_ReturnsSortedByPath()
+    public void GetAllResizers_ReturnsInInsertionOrder()
     {
         lock (StaticStateLock)
         {
-            CreateService(nameof(GetAllResizers_ReturnsSortedByPath));
+            CreateService(nameof(GetAllResizers_ReturnsInInsertionOrder));
 
             var all = TextResizerService.GetAllResizers();
 

@@ -100,8 +100,19 @@ public static class TextResizerEditorUi
         _selectedOriginalPath = null;
 
         BuildRoot();
-        RebuildListPanel();
-        RebuildFormPanel();
+
+        var newlyAddedPath = TextResizerService.LastAddedResizerPath;
+        TextResizerService.LastAddedResizerPath = null;
+        if (newlyAddedPath != null && TextResizerService.Resizers.ContainsKey(newlyAddedPath))
+        {
+            // SelectResizer rebuilds both the list and form panels itself.
+            SelectResizer(newlyAddedPath);
+        }
+        else
+        {
+            RebuildListPanel();
+            RebuildFormPanel();
+        }
     }
 
     public static void Close()
@@ -155,6 +166,16 @@ public static class TextResizerEditorUi
             _selected = null;
             _selectedOriginalPath = null;
             RebuildFormPanel();
+        }
+
+        // If a resizer was just added out-of-band (hotkey), save whatever's currently being
+        // edited (SelectResizer does this when switching) and select the new one instead.
+        var newlyAddedPath = TextResizerService.LastAddedResizerPath;
+        TextResizerService.LastAddedResizerPath = null;
+        if (newlyAddedPath != null && TextResizerService.Resizers.ContainsKey(newlyAddedPath))
+        {
+            SelectResizer(newlyAddedPath);
+            return;
         }
 
         RebuildListPanel();
@@ -342,7 +363,6 @@ public static class TextResizerEditorUi
         _titleDragRect.anchoredPosition = Vector2.zero;
 
         CreateLabel(_panel, "Title", "TextResizer Editor  (drag title bar to move)", new Vector2(10, -10), new Vector2(800, 24), 16, TextAnchor.UpperLeft, Color.white);
-        CreateButton(_panelClickables, _panel, "Close", new Vector2(824, -34), new Vector2(86, 24), Close, new Color(0.35f, 0.35f, 0.35f));
         _statusLabel = CreateLabel(_panel, "Status", string.Empty, new Vector2(10, -614), new Vector2(880, 20), 12, TextAnchor.UpperLeft, new Color(1f, 0.85f, 0.3f));
     }
 

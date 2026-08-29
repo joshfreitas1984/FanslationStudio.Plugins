@@ -35,6 +35,12 @@ public class TextResizerService
     // rewritten independently based on which resizer paths currently point at it.
     public static Dictionary<string, string> ResizerSourceFiles = [];
 
+    // Set to the Path of the most recently hotkey-added resizer (AddResizersForScene/
+    // AddResizersAtCursor), so the editor UI can automatically select it once opened/refreshed.
+    // Not set for the initial bulk LoadResizers/Reload. Consumed (read then reset to null) by the
+    // editor UI, so it only triggers an auto-select once per addition.
+    public static string LastAddedResizerPath;
+
     // Cache for storing previously matched results
     public static Dictionary<string, TextResizerContract> CachedMatchedResizers = [];
 
@@ -133,6 +139,7 @@ public class TextResizerService
     public void AddResizersForScene()
     {
         _logger.LogWarning("Adding Resizers for Scene");
+        LastAddedResizerPath = null;
         var tmpElements = FindAllTextElements();
         var textElements = FindAllLegacyTextElements();
         AddTextElementsToResizers(tmpElements);
@@ -142,6 +149,7 @@ public class TextResizerService
     public void AddResizersAtCursor(float x, float y, float z)
     {
         _logger.LogWarning("Adding Resizers at Cursor");
+        LastAddedResizerPath = null;
         var tmpElements = FindTextElementsUnderCursor(x, y, z);
         var textElements = FindLegacyTextElementsUnderCursor(x, y, z);
         AddTextElementsToResizers(tmpElements, addUnderCursor: true);
@@ -178,7 +186,7 @@ public class TextResizerService
         ResizersLoaded = true;
     }
 
-    private void AddFoundResizers(List<TextResizerContract> newResizers, string sourceFile)
+    private void AddFoundResizers(List<TextResizerContract> newResizers, string sourceFile, bool trackLastAdded = false)
     {
         foreach (var newResizer in newResizers)
         {
@@ -187,16 +195,20 @@ public class TextResizerService
                 Resizers.Add(newResizer.Path, newResizer);
                 ResizerSourceFiles[newResizer.Path] = sourceFile;
                 ResizersVersion++;
+
+                if (trackLastAdded)
+                    LastAddedResizerPath = newResizer.Path;
             }
         }
     }
 
     /// <summary>
-    /// Returns all currently-loaded resizers, sorted by path, for display in the editor UI.
+    /// Returns all currently-loaded resizers in the order they appear in <see cref="Resizers"/>
+    /// (insertion order), for display in the editor UI.
     /// </summary>
     public static List<TextResizerContract> GetAllResizers()
     {
-        return Resizers.Values.OrderBy(r => r.Path, StringComparer.Ordinal).ToList();
+        return Resizers.Values.ToList();
     }
 
     /// <summary>
@@ -454,7 +466,7 @@ public class TextResizerService
 
             _logger.LogWarning($"Writing to {addedResizersFile}");
 
-            AddFoundResizers(foundResizers, addedResizersFile);
+            AddFoundResizers(foundResizers, addedResizersFile, trackLastAdded: true);
             RewriteFile(addedResizersFile);
         }
         else
@@ -494,7 +506,7 @@ public class TextResizerService
 
             _logger.LogWarning($"Writing to {addedResizersFile}");
 
-            AddFoundResizers(foundResizers, addedResizersFile);
+            AddFoundResizers(foundResizers, addedResizersFile, trackLastAdded: true);
             RewriteFile(addedResizersFile);
         }
         else

@@ -8,11 +8,12 @@ You can join us here: [Discord](https://discord.gg/sqXd5ceBWT)
 
 ## Custom Text Resizer
 
-Pressing Keypad_- you will add the resizer under your current cursor to `BepInEx/resizers/zzAddedResizers.yaml` you can then tweak the properties on the resizer to your liking and reload them.
+Pressing Keypad_/ you will add the resizer under your current cursor to `BepInEx/resizers/zzAddedResizers.yaml` you can then tweak the properties on the resizer to your liking and reload them.
 
 Pressing Keypad_+ will reload your resizers if something looks screwy.
 
 You can use Keypad_* to add all text items on screen. Be warned it will grab a lot!
+
 
 You can use * inside the path to indicate a wildcard (ie: match zero or more characters where the * is). This will help you do one resizer for lots of stuff.
 
