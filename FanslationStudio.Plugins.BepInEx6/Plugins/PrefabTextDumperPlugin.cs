@@ -27,7 +27,7 @@ public class PrefabTextDumperPlugin : BaseUnityPlugin
 {
     private static IPluginLogger _logger;
     private static PrefabTextDumperServiceWrapper _service;
-    private readonly KeyCode _dumpHotkey = KeyCode.F4;
+    private KeyCode _dumpHotkey;
 
     private void Awake()
     {
@@ -37,6 +37,11 @@ public class PrefabTextDumperPlugin : BaseUnityPlugin
             "Regex pattern for foreign language to scan for").Value;
         var dumpFiles = Config.Bind("General", "DumpFilePath", "./dumpeddata",
             "File to dump the dynamic strings to").Value;
+
+        _dumpHotkey = Config.Bind("Hotkeys",
+            "DumpHotkey",
+            KeyCode.F4,
+            "Dumps all prefab texts").Value;
 
         _logger = new BepInEx6Logger(base.Logger);
         _service = new PrefabTextDumperServiceWrapper(_logger, dumpFiles, regexPattern, enabled,

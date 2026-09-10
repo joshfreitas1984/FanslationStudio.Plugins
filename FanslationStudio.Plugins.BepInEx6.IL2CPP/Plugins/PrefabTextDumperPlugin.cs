@@ -29,7 +29,7 @@ public class PrefabTextDumperPlugin : BasePlugin
 {
     private static IPluginLogger _logger;
     private static PrefabTextDumperServiceWrapper _service;
-    private static readonly KeyboardShortcut DumpHotkey = new(KeyCode.KeypadPeriod);
+    private static KeyboardShortcut DumpHotkey;
 
     public override void Load()
     {
@@ -39,6 +39,12 @@ public class PrefabTextDumperPlugin : BasePlugin
             "Regex pattern for foreign language to scan for").Value;
         var dumpFiles = Config.Bind("General", "DumpFilePath", "./dumpeddata",
             "File to dump the dynamic strings to").Value;
+
+        // KeyboardShortcut has a built-in BepInEx TOML converter, so it can be bound directly.
+        DumpHotkey = Config.Bind("Hotkeys",
+            "DumpHotkey",
+            new KeyboardShortcut(KeyCode.KeypadPeriod),
+            "Dumps all prefab texts").Value;
 
         _logger = new BepInEx6Logger(base.Log);
         _service = new PrefabTextDumperServiceWrapper(_logger, dumpFiles, regexPattern, enabled,

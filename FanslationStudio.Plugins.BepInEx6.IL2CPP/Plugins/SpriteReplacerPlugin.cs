@@ -15,9 +15,9 @@ public class SpriteReplacerPlugin : BasePlugin
 {
     private static IPluginLogger _logger;
     private static SpriteReplacerService _service;
-    private static readonly KeyboardShortcut AddAtCursorHotKey = new(KeyCode.F1);
-    private static readonly KeyboardShortcut AddAllHotKey = new(KeyCode.F2);
-    private static readonly KeyboardShortcut ReloadHotkey = new(KeyCode.F3);
+    private static KeyboardShortcut AddAtCursorHotKey;
+    private static KeyboardShortcut AddAllHotKey;
+    private static KeyboardShortcut ReloadHotkey;
     private static bool _enabled;
 
     public override void Load()
@@ -26,6 +26,20 @@ public class SpriteReplacerPlugin : BasePlugin
             "Enabled",
             false,
             "Turn on sprite replacer plugin").Value;
+
+        // KeyboardShortcut has a built-in BepInEx TOML converter, so it can be bound directly.
+        AddAtCursorHotKey = Config.Bind("Hotkeys",
+            "AddAtCursorHotKey",
+            new KeyboardShortcut(KeyCode.F1),
+            "Adds a sprite replacer at the cursor position").Value;
+        AddAllHotKey = Config.Bind("Hotkeys",
+            "AddAllHotKey",
+            new KeyboardShortcut(KeyCode.F2),
+            "Adds sprite replacers for every sprite in the current scene").Value;
+        ReloadHotkey = Config.Bind("Hotkeys",
+            "ReloadHotkey",
+            new KeyboardShortcut(KeyCode.F3),
+            "Reloads the sprite replacer configuration").Value;
 
         if (!_enabled)
             return;

@@ -22,9 +22,9 @@ public class SpriteReplacerServiceWrapper : SpriteReplacerService
 public class SpriteReplacerPlugin : BaseUnityPlugin
 {
     private static SpriteReplacerServiceWrapper _service;
-    private KeyCode _addAtCursorHotKey = KeyCode.F1;
-    private KeyCode _addAllHotKey = KeyCode.F2;
-    private KeyCode _reloadHotkey = KeyCode.F3;
+    private KeyCode _addAtCursorHotKey;
+    private KeyCode _addAllHotKey;
+    private KeyCode _reloadHotkey;
     private static bool _enabled;
 
     private void Awake()
@@ -33,6 +33,19 @@ public class SpriteReplacerPlugin : BaseUnityPlugin
             "Enabled",
             false,
             "Turn on sprite replacer plugin").Value;
+
+        _addAtCursorHotKey = Config.Bind("Hotkeys",
+            "AddAtCursorHotKey",
+            KeyCode.F1,
+            "Adds a sprite replacer at the cursor position").Value;
+        _addAllHotKey = Config.Bind("Hotkeys",
+            "AddAllHotKey",
+            KeyCode.F2,
+            "Adds sprite replacers for every sprite in the current scene").Value;
+        _reloadHotkey = Config.Bind("Hotkeys",
+            "ReloadHotkey",
+            KeyCode.F3,
+            "Reloads the sprite replacer configuration").Value;
 
         if (!_enabled)
             return;

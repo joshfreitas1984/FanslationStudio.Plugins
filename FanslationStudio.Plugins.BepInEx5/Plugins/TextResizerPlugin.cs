@@ -26,9 +26,9 @@ internal class TextResizerPlugin : BaseUnityPlugin
     private static TextResizerServiceWrapper _service;
     private static bool _enabled = true;
 
-    private KeyCode _addResizerAtCursorHotKey = KeyCode.KeypadMinus;
-    private KeyCode _reloadHotkey = KeyCode.KeypadPlus;
-    private KeyCode _addResizerHotKey = KeyCode.KeypadMultiply;
+    private KeyCode _addResizerAtCursorHotKey;
+    private KeyCode _reloadHotkey;
+    private KeyCode _addResizerHotKey;
 
     private void Awake()
     {
@@ -36,6 +36,19 @@ internal class TextResizerPlugin : BaseUnityPlugin
             "TextResizerEnabled",
             true,
             "Enable Text Resizer plugin").Value;
+
+        _addResizerAtCursorHotKey = Config.Bind("Hotkeys",
+            "AddResizerAtCursorHotKey",
+            KeyCode.KeypadMinus,
+            "Adds a text resizer at the cursor position").Value;
+        _reloadHotkey = Config.Bind("Hotkeys",
+            "ReloadHotkey",
+            KeyCode.KeypadPlus,
+            "Reloads the text resizer configuration").Value;
+        _addResizerHotKey = Config.Bind("Hotkeys",
+            "AddResizerHotKey",
+            KeyCode.KeypadMultiply,
+            "Adds text resizers for every element in the current scene").Value;
 
         if (!_enabled)
             return;

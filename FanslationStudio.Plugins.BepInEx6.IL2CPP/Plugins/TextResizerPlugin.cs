@@ -18,9 +18,9 @@ public class TextResizerPlugin : BasePlugin
     private static TextResizerService _service;
     private static bool _enabled = true;
 
-    private static readonly KeyboardShortcut AddResizerAtCursorHotKey = new(KeyCode.KeypadDivide);
-    private static readonly KeyboardShortcut ReloadHotkey = new(KeyCode.KeypadPlus);
-    private static readonly KeyboardShortcut AddResizerHotKey = new(KeyCode.KeypadMultiply);
+    private static KeyboardShortcut AddResizerAtCursorHotKey;
+    private static KeyboardShortcut ReloadHotkey;
+    private static KeyboardShortcut AddResizerHotKey;
 
     public override void Load()
     {
@@ -28,6 +28,20 @@ public class TextResizerPlugin : BasePlugin
             "TextResizerEnabled",
             true,
             "Enable Text Resizer plugin").Value;
+
+        // KeyboardShortcut has a built-in BepInEx TOML converter, so it can be bound directly.
+        AddResizerAtCursorHotKey = Config.Bind("Hotkeys",
+            "AddResizerAtCursorHotKey",
+            new KeyboardShortcut(KeyCode.KeypadDivide),
+            "Adds a text resizer at the cursor position").Value;
+        ReloadHotkey = Config.Bind("Hotkeys",
+            "ReloadHotkey",
+            new KeyboardShortcut(KeyCode.KeypadPlus),
+            "Reloads the text resizer configuration").Value;
+        AddResizerHotKey = Config.Bind("Hotkeys",
+            "AddResizerHotKey",
+            new KeyboardShortcut(KeyCode.KeypadMultiply),
+            "Adds text resizers for every element in the current scene").Value;
 
         _logger = new BepInEx6Logger(base.Log);
         _logger.LogInfo($"[TextResizer DEBUG] Load() called, _enabled={_enabled}");

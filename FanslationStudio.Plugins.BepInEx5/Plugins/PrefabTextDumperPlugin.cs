@@ -26,7 +26,7 @@ public class PrefabTextDumperServiceWrapper : PrefabTextDumperService
 public class PrefabTextDumperPlugin : BaseUnityPlugin
 {
     public PrefabTextDumperServiceWrapper PrefabTextDumper;
-    private readonly KeyCode _dumpHotkey = KeyCode.F4;
+    private KeyCode _dumpHotkey;
 
     private void Awake()
     {
@@ -36,6 +36,11 @@ public class PrefabTextDumperPlugin : BaseUnityPlugin
             "Regex pattern for foreign language to scan for").Value;
         var dumpFiles = Config.Bind("General", "DumpFilePath", "./dumpeddata",
             "File to dump the dynamic strings to").Value;
+
+        _dumpHotkey = Config.Bind("Hotkeys",
+            "DumpHotkey",
+            KeyCode.F4,
+            "Dumps all prefab texts").Value;
 
         // BepInEx.Core 5.x's Paths class doesn't expose GameDataPath (added in later BepInEx.Core
         // versions used by the other hosts), so derive it here instead. Safe to go up one level
