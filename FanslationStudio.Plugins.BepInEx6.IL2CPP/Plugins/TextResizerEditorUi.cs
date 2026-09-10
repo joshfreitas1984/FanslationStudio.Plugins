@@ -40,7 +40,28 @@ public static class TextResizerEditorUi
 
     private static List<TextResizerContract> _allResizers = new();
     private static int _pageIndex;
-    private const int PageSize = 12;
+
+    // Recomputed on each Open() from the available screen height (see BuildRoot) so the list
+    // fills the window instead of being capped at a fixed row count regardless of monitor size.
+    private static int _pageSize = 12;
+
+    private const float PanelWidth = 920f;
+
+    // Width reserved at the top-right of the title bar for the close [x] button - kept out of
+    // the title drag handle's hit area so clicking it doesn't start a window drag instead.
+    private const float CloseButtonAreaWidth = 44f;
+
+    // Height of the strip above the list/form panels (title bar) and below them (status label)
+    // that isn't available for content - see BuildRoot/_contentAreaHeight.
+    private const float ChromeHeight = 80f;
+
+    // Height of the form content itself, from its top down to the bottom of the Save/Delete/
+    // Close button row (see the y math in RebuildFormPanel), plus a little breathing room. The
+    // window is sized to fit this rather than stretching to fill the screen, so it comfortably
+    // fits on a 1080p display.
+    private const float FormContentHeight = 528f;
+
+    private static float _contentAreaHeight = 560f;
 
     private static TextResizerContract _selected;
 
@@ -62,10 +83,30 @@ public static class TextResizerEditorUi
     private static string _openDropdownKey;
     private static (string key, string[] options, float fieldY)? _pendingDropdownOverlay;
 
+    // Reset to 0 whenever a dropdown is opened/closed/an option is picked. Merging the TMP and
+    // legacy option sets (see AlignmentOptions/OverflowModeOptions below) can push a dropdown's
+    // option count past 40 - rendering all of them at once would draw an overlay tall enough to
+    // cover the rest of the form (e.g. opening Alignment would visually bury the Overflow Mode
+    // row right underneath it), so BuildDropdownOverlay pages through a fixed-size window instead.
+    private static int _dropdownScrollOffset;
+
+    // A resizer's Path can match either a TextMeshProUGUI or a legacy UI.Text element (see
+    // TextResizerService.ApplyResizing/ApplyResizingToLegacyText), each with its own
+    // alignment/overflow enum. The editor doesn't know which one a given path will resolve to,
+    // so both enums' option names are merged into one list per field rather than picking just one.
     private static readonly string[] AlignmentOptions =
-        new[] { string.Empty }.Concat(Enum.GetNames(typeof(TextAlignmentOptions))).ToArray();
+        new[] { string.Empty }
+            .Concat(Enum.GetNames(typeof(TextAlignmentOptions)))
+            .Concat(Enum.GetNames(typeof(TextAnchor)))
+            .Distinct()
+            .ToArray();
     private static readonly string[] OverflowModeOptions =
-        new[] { string.Empty }.Concat(Enum.GetNames(typeof(TextOverflowModes))).ToArray();
+        new[] { string.Empty }
+            .Concat(Enum.GetNames(typeof(TextOverflowModes)))
+            .Concat(Enum.GetNames(typeof(HorizontalWrapMode)))
+            .Concat(Enum.GetNames(typeof(VerticalWrapMode)))
+            .Distinct()
+            .ToArray();
 
     private const string WindowPosPrefKeyX = "FSTextResizerEditor.WindowX";
     private const string WindowPosPrefKeyY = "FSTextResizerEditor.WindowY";
@@ -140,6 +181,7 @@ public static class TextResizerEditorUi
         _dropdownOverlayClickables.Clear();
         _panelClickables.Clear();
         _openDropdownKey = null;
+        _dropdownScrollOffset = 0;
         _isDragging = false;
         _selected = null;
         _selectedOriginalPath = null;
@@ -269,6 +311,7 @@ public static class TextResizerEditorUi
             // Clicking anywhere outside the open dropdown's own options closes it without
             // also triggering whatever's underneath (e.g. a button the overlay was covering).
             _openDropdownKey = null;
+            _dropdownScrollOffset = 0;
             RebuildFormPanel();
             return;
         }
@@ -354,8 +397,18 @@ public static class TextResizerEditorUi
         _panel.anchorMin = new Vector2(0.5f, 0.5f);
         _panel.anchorMax = new Vector2(0.5f, 0.5f);
         _panel.pivot = new Vector2(0.5f, 0.5f);
-        _panel.sizeDelta = new Vector2(920, 640);
+
+        // Size to fit the form content (down to the bottom of the Save/Delete/Close row) rather
+        // than stretching to fill the screen - only shrink further if that doesn't fit on a
+        // short/low-res display (e.g. 1080p).
+        var screenHeight = Mathf.Max(Screen.height, 600f);
+        var panelHeight = Mathf.Min(FormContentHeight + ChromeHeight, screenHeight - 40f);
+        _panel.sizeDelta = new Vector2(PanelWidth, panelHeight);
         _panel.anchoredPosition = LoadWindowPosition();
+
+        _contentAreaHeight = panelHeight - ChromeHeight;
+        var itemsAreaHeight = _contentAreaHeight - 20f /*page info*/ - 10f /*gap*/ - 24f /*nav row*/;
+        _pageSize = Math.Max(6, (int)(itemsAreaHeight / 26f));
 
         var dragHandleGo = new GameObject("TitleDragHandle");
         dragHandleGo.transform.SetParent(_panel, false);
@@ -363,13 +416,14 @@ public static class TextResizerEditorUi
         dragHandleImage.color = new Color(0f, 0f, 0f, 0f);
         _titleDragRect = dragHandleGo.transform.TryCast<RectTransform>();
         _titleDragRect.anchorMin = new Vector2(0, 1);
-        _titleDragRect.anchorMax = new Vector2(1, 1);
-        _titleDragRect.pivot = new Vector2(0.5f, 1);
-        _titleDragRect.sizeDelta = new Vector2(0, 30);
+        _titleDragRect.anchorMax = new Vector2(0, 1);
+        _titleDragRect.pivot = new Vector2(0, 1);
+        _titleDragRect.sizeDelta = new Vector2(PanelWidth - CloseButtonAreaWidth, 30);
         _titleDragRect.anchoredPosition = Vector2.zero;
 
-        CreateLabel(_panel, "Title", "TextResizer Editor  (drag title bar to move)", new Vector2(10, -10), new Vector2(800, 24), 16, TextAnchor.UpperLeft, Color.white);
-        _statusLabel = CreateLabel(_panel, "Status", string.Empty, new Vector2(10, -614), new Vector2(880, 20), 12, TextAnchor.UpperLeft, new Color(1f, 0.85f, 0.3f));
+        CreateLabel(_panel, "Title", "TextResizer Editor  (drag title bar to move)", new Vector2(10, -10), new Vector2(760, 24), 16, TextAnchor.UpperLeft, Color.white);
+        CreateButton(_panelClickables, _panel, "X", new Vector2(PanelWidth - 34, -10), new Vector2(24, 24), Close, new Color(0.6f, 0.2f, 0.2f));
+        _statusLabel = CreateLabel(_panel, "Status", string.Empty, new Vector2(10, 10), new Vector2(880, 20), 12, TextAnchor.UpperLeft, new Color(1f, 0.85f, 0.3f), anchorBottom: true);
     }
 
     private static Vector2 LoadWindowPosition()
@@ -410,11 +464,11 @@ public static class TextResizerEditorUi
         _listContainer.anchorMin = new Vector2(0, 1);
         _listContainer.anchorMax = new Vector2(0, 1);
         _listContainer.pivot = new Vector2(0, 1);
-        _listContainer.sizeDelta = new Vector2(280, 560);
+        _listContainer.sizeDelta = new Vector2(280, _contentAreaHeight);
         _listContainer.anchoredPosition = new Vector2(10, -40);
 
-        var pageItems = _allResizers.Skip(_pageIndex * PageSize).Take(PageSize).ToList();
-        var totalPages = Math.Max(1, (int)Math.Ceiling(_allResizers.Count / (double)PageSize));
+        var pageItems = _allResizers.Skip(_pageIndex * _pageSize).Take(_pageSize).ToList();
+        var totalPages = Math.Max(1, (int)Math.Ceiling(_allResizers.Count / (double)_pageSize));
 
         CreateLabel(_listContainer, "PageInfo", $"Resizers ({_allResizers.Count}) - page {_pageIndex + 1}/{totalPages}",
             new Vector2(0, 0), new Vector2(280, 20), 12, TextAnchor.UpperLeft, Color.white);
@@ -455,14 +509,14 @@ public static class TextResizerEditorUi
             _listClickables.Add((itemRect, () => SelectResizer(path)));
         }
 
-        var navY = -24 - PageSize * 26 - 10;
+        var navY = -24 - _pageSize * 26 - 10;
         CreateButton(_listClickables, _listContainer, "< Prev", new Vector2(0, navY), new Vector2(80, 24), () =>
         {
             if (_pageIndex > 0) { _pageIndex--; RebuildListPanel(); }
         });
         CreateButton(_listClickables, _listContainer, "Next >", new Vector2(90, navY), new Vector2(80, 24), () =>
         {
-            if ((_pageIndex + 1) * PageSize < _allResizers.Count) { _pageIndex++; RebuildListPanel(); }
+            if ((_pageIndex + 1) * _pageSize < _allResizers.Count) { _pageIndex++; RebuildListPanel(); }
         });
         CreateButton(_listClickables, _listContainer, "Refresh", new Vector2(180, navY), new Vector2(90, 24), () =>
         {
@@ -504,7 +558,7 @@ public static class TextResizerEditorUi
         _formContainer.anchorMin = new Vector2(0, 1);
         _formContainer.anchorMax = new Vector2(0, 1);
         _formContainer.pivot = new Vector2(0, 1);
-        _formContainer.sizeDelta = new Vector2(600, 560);
+        _formContainer.sizeDelta = new Vector2(600, _contentAreaHeight);
         _formContainer.anchoredPosition = new Vector2(300, -40);
 
         if (_selected == null)
@@ -642,6 +696,7 @@ public static class TextResizerEditorUi
         _formClickables.Add((rect, () =>
         {
             _openDropdownKey = _openDropdownKey == key ? null : key;
+            _dropdownScrollOffset = 0;
             RebuildFormPanel();
         }
         ));
@@ -652,9 +707,21 @@ public static class TextResizerEditorUi
         return y - rowHeight;
     }
 
+    // Caps how many options are drawn at once - the merged TMP+legacy option lists (see
+    // AlignmentOptions/OverflowModeOptions) can run past 40 entries, and rendering all of them
+    // would draw an overlay tall enough to bury the rest of the form underneath it.
+    private const int MaxVisibleDropdownOptions = 12;
+
     private static void BuildDropdownOverlay(string key, string[] options, float fieldY)
     {
         const float optionRowHeight = 22f;
+
+        var needsPaging = options.Length > MaxVisibleDropdownOptions;
+        var maxOffset = Math.Max(0, options.Length - MaxVisibleDropdownOptions);
+        _dropdownScrollOffset = Math.Clamp(_dropdownScrollOffset, 0, maxOffset);
+
+        var visibleOptions = options.Skip(_dropdownScrollOffset).Take(MaxVisibleDropdownOptions).ToList();
+        var rowCount = visibleOptions.Count + (needsPaging ? 2 : 0);
 
         var overlayGo = new GameObject("DropdownOverlay");
         overlayGo.transform.SetParent(_formContainer, false);
@@ -664,46 +731,66 @@ public static class TextResizerEditorUi
         overlayRect.anchorMin = new Vector2(0, 1);
         overlayRect.anchorMax = new Vector2(0, 1);
         overlayRect.pivot = new Vector2(0, 1);
-        overlayRect.sizeDelta = new Vector2(200, options.Length * optionRowHeight + 4);
+        overlayRect.sizeDelta = new Vector2(200, rowCount * optionRowHeight + 4);
         overlayRect.anchoredPosition = new Vector2(190, fieldY - 24);
 
-        for (var i = 0; i < options.Length; i++)
+        var rowIndex = 0;
+
+        if (needsPaging)
         {
-            var optionValue = options[i];
+            var canScrollUp = _dropdownScrollOffset > 0;
+            CreateDropdownOverlayRow(overlayRect, rowIndex++, optionRowHeight, canScrollUp ? "▲ More" : "▲",
+                canScrollUp ? () => { _dropdownScrollOffset = Math.Max(0, _dropdownScrollOffset - MaxVisibleDropdownOptions); RebuildFormPanel(); } : null);
+        }
 
-            var itemGo = new GameObject($"Option_{i}");
-            itemGo.transform.SetParent(overlayRect, false);
-            var itemImage = itemGo.AddComponent(Il2CppType.From(typeof(Image))).TryCast<Image>();
-            itemImage.color = new Color(0.2f, 0.2f, 0.2f, 1f);
-            var itemRect = itemGo.transform.TryCast<RectTransform>();
-            itemRect.anchorMin = new Vector2(0, 1);
-            itemRect.anchorMax = new Vector2(0, 1);
-            itemRect.pivot = new Vector2(0, 1);
-            itemRect.sizeDelta = new Vector2(196, optionRowHeight - 2);
-            itemRect.anchoredPosition = new Vector2(2, -2 - i * optionRowHeight);
-
-            var itemLabelGo = new GameObject("Label");
-            itemLabelGo.transform.SetParent(itemGo.transform, false);
-            var itemLabel = itemLabelGo.AddComponent(Il2CppType.From(typeof(Text))).TryCast<Text>();
-            itemLabel.font = GetBuiltinFont();
-            itemLabel.fontSize = 12;
-            itemLabel.color = Color.white;
-            itemLabel.alignment = TextAnchor.MiddleLeft;
-            itemLabel.text = string.IsNullOrEmpty(optionValue) ? "(none)" : optionValue;
-            var itemLabelRect = itemLabelGo.transform.TryCast<RectTransform>();
-            itemLabelRect.anchorMin = Vector2.zero;
-            itemLabelRect.anchorMax = Vector2.one;
-            itemLabelRect.offsetMin = new Vector2(6, 0);
-            itemLabelRect.offsetMax = new Vector2(-6, 0);
-
-            _dropdownOverlayClickables.Add((itemRect, () =>
+        foreach (var optionValue in visibleOptions)
+        {
+            CreateDropdownOverlayRow(overlayRect, rowIndex++, optionRowHeight, string.IsNullOrEmpty(optionValue) ? "(none)" : optionValue, () =>
             {
                 ApplyFieldValue(key, optionValue);
                 _openDropdownKey = null;
+                _dropdownScrollOffset = 0;
                 RebuildFormPanel();
-            }
-            ));
+            });
         }
+
+        if (needsPaging)
+        {
+            var canScrollDown = _dropdownScrollOffset + MaxVisibleDropdownOptions < options.Length;
+            CreateDropdownOverlayRow(overlayRect, rowIndex++, optionRowHeight, canScrollDown ? "▼ More" : "▼",
+                canScrollDown ? () => { _dropdownScrollOffset = Math.Min(maxOffset, _dropdownScrollOffset + MaxVisibleDropdownOptions); RebuildFormPanel(); } : null);
+        }
+    }
+
+    private static void CreateDropdownOverlayRow(RectTransform overlayRect, int rowIndex, float optionRowHeight, string text, Action onClick)
+    {
+        var itemGo = new GameObject($"Option_{rowIndex}");
+        itemGo.transform.SetParent(overlayRect, false);
+        var itemImage = itemGo.AddComponent(Il2CppType.From(typeof(Image))).TryCast<Image>();
+        itemImage.color = onClick == null ? new Color(0.16f, 0.16f, 0.16f, 1f) : new Color(0.2f, 0.2f, 0.2f, 1f);
+        var itemRect = itemGo.transform.TryCast<RectTransform>();
+        itemRect.anchorMin = new Vector2(0, 1);
+        itemRect.anchorMax = new Vector2(0, 1);
+        itemRect.pivot = new Vector2(0, 1);
+        itemRect.sizeDelta = new Vector2(196, optionRowHeight - 2);
+        itemRect.anchoredPosition = new Vector2(2, -2 - rowIndex * optionRowHeight);
+
+        var itemLabelGo = new GameObject("Label");
+        itemLabelGo.transform.SetParent(itemGo.transform, false);
+        var itemLabel = itemLabelGo.AddComponent(Il2CppType.From(typeof(Text))).TryCast<Text>();
+        itemLabel.font = GetBuiltinFont();
+        itemLabel.fontSize = 12;
+        itemLabel.color = onClick == null ? new Color(0.5f, 0.5f, 0.5f) : Color.white;
+        itemLabel.alignment = onClick == null ? TextAnchor.MiddleCenter : TextAnchor.MiddleLeft;
+        itemLabel.text = text;
+        var itemLabelRect = itemLabelGo.transform.TryCast<RectTransform>();
+        itemLabelRect.anchorMin = Vector2.zero;
+        itemLabelRect.anchorMax = Vector2.one;
+        itemLabelRect.offsetMin = new Vector2(6, 0);
+        itemLabelRect.offsetMax = new Vector2(-6, 0);
+
+        if (onClick != null)
+            _dropdownOverlayClickables.Add((itemRect, onClick));
     }
 
     private static float CreateTriStateToggleRow(string label, Func<bool?> getValue, Action<bool?> setValue, float y, float rowHeight)
@@ -779,7 +866,7 @@ public static class TextResizerEditorUi
             _statusLabel.text = text;
     }
 
-    private static Text CreateLabel(RectTransform parent, string name, string text, Vector2 topLeftOffset, Vector2 size, int fontSize, TextAnchor alignment, Color color)
+    private static Text CreateLabel(RectTransform parent, string name, string text, Vector2 offset, Vector2 size, int fontSize, TextAnchor alignment, Color color, bool anchorBottom = false)
     {
         var go = new GameObject(name);
         go.transform.SetParent(parent, false);
@@ -793,11 +880,12 @@ public static class TextResizerEditorUi
         label.verticalOverflow = VerticalWrapMode.Truncate;
 
         var rect = go.transform.TryCast<RectTransform>();
-        rect.anchorMin = new Vector2(0, 1);
-        rect.anchorMax = new Vector2(0, 1);
-        rect.pivot = new Vector2(0, 1);
+        var anchor = anchorBottom ? new Vector2(0, 0) : new Vector2(0, 1);
+        rect.anchorMin = anchor;
+        rect.anchorMax = anchor;
+        rect.pivot = anchor;
         rect.sizeDelta = size;
-        rect.anchoredPosition = topLeftOffset;
+        rect.anchoredPosition = offset;
         return label;
     }
 
@@ -819,6 +907,7 @@ public static class TextResizerEditorUi
         var text = textGo.AddComponent(Il2CppType.From(typeof(Text))).TryCast<Text>();
         text.font = GetBuiltinFont();
         text.fontSize = 13;
+        text.fontStyle = FontStyle.Bold;
         text.color = Color.black;
         text.alignment = TextAnchor.MiddleLeft;
         var textRect = textGo.transform.TryCast<RectTransform>();
@@ -854,12 +943,21 @@ public static class TextResizerEditorUi
         label.fontSize = 13;
         label.color = Color.white;
         label.alignment = TextAnchor.MiddleCenter;
+        label.horizontalOverflow = HorizontalWrapMode.Overflow;
+        label.verticalOverflow = VerticalWrapMode.Overflow;
         label.text = text;
+
+        // TextAnchor.MiddleCenter doesn't reliably center horizontally against a full-width rect
+        // on this host (button labels render hugging the left edge instead) - work around it by
+        // sizing the label's rect to the text's own measured width and centering that narrow
+        // rect within the button, so any residual horizontal alignment error is imperceptible.
+        var labelWidth = Mathf.Min(label.preferredWidth + 8f, size.x);
         var labelRect = labelGo.transform.TryCast<RectTransform>();
-        labelRect.anchorMin = Vector2.zero;
-        labelRect.anchorMax = Vector2.one;
-        labelRect.offsetMin = Vector2.zero;
-        labelRect.offsetMax = Vector2.zero;
+        labelRect.anchorMin = new Vector2(0.5f, 0f);
+        labelRect.anchorMax = new Vector2(0.5f, 1f);
+        labelRect.pivot = new Vector2(0.5f, 0.5f);
+        labelRect.sizeDelta = new Vector2(labelWidth, 0f);
+        labelRect.anchoredPosition = Vector2.zero;
 
         targetList.Add((rect, onClick));
     }

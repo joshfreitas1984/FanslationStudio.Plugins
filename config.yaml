@@ -4,8 +4,9 @@ games:
     managedPath: '\Mortal_Data\Managed'
     pluginPath: '\BepInEx\plugins'
     releasePath: '\ReleaseFolder\Files'
-    export: false
-    version: 6
+    export: true
+    # version: 6
+    version: 5
   - name: "LegendOfDragonHeir"
     gamePath: 'G:\SteamLibrary\steamapps\common\LongYinLiZhiZhuan'
     managedPath: '\BepInEx\plugins'

@@ -1,4 +1,5 @@
-﻿using BepInEx;
+using System;
+using BepInEx;
 using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.Support;
 using FanslationStudio.Plugins.TextResizer;
@@ -59,35 +60,54 @@ internal class TextResizerPlugin : BaseUnityPlugin
         _service.Awake();
 
         TextResizerEditorUi.Configure(_service);
+
+        // Some hosts disable/deactivate freshly-injected plugin GameObjects/components shortly
+        // after chainloader startup (observed on at least one BepInEx5 title), which silently
+        // stops MonoBehaviour.Update from ever firing again - with no exception and no managed
+        // stack trace at the point of disable, so it can't be caught or worked around from here.
+        // Canvas.willRenderCanvases is a static engine event: subscribing to it doesn't add
+        // anything to the scene graph, so it isn't affected by that behaviour, and it fires every
+        // frame the game is about to render any canvas (which every TMPro/UGUI game does).
+        Canvas.willRenderCanvases += Tick;
     }
 
-    internal void Update()
+    private void Tick()
     {
         if (!_enabled)
             return;
 
-        _service.EnsurePatched();
-        _service.CheckForSceneChange();
-
-        if (UnityInput.Current.GetKeyDown(_reloadHotkey))
-            _service.Reload();
-
-        if (UnityInput.Current.GetKeyDown(_addResizerHotKey))
+        // Canvas.willRenderCanvases is invoked directly by the engine for every subscriber;
+        // an uncaught exception here could take down other listeners (including Unity's own
+        // UI redraw for this frame), so keep this method from ever throwing out to the event.
+        try
         {
-            _service.AddResizersForScene();
-            TextResizerEditorUi.Open();
+            _service.EnsurePatched();
+            _service.CheckForSceneChange();
+
+            if (UnityInput.Current.GetKeyDown(_reloadHotkey))
+                _service.Reload();
+
+            if (UnityInput.Current.GetKeyDown(_addResizerHotKey))
+            {
+                _service.AddResizersForScene();
+                TextResizerEditorUi.Open();
+            }
+
+            var x = UnityInput.Current.mousePosition.x;
+            var y = UnityInput.Current.mousePosition.y;
+            var z = UnityInput.Current.mousePosition.z;
+
+            if (UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey))
+            {
+                _service.AddResizersAtCursor(x, y, z);
+                TextResizerEditorUi.Open();
+            }
+
+            TextResizerEditorUi.Tick();
         }
-
-        var x = UnityInput.Current.mousePosition.x;
-        var y = UnityInput.Current.mousePosition.y;
-        var z = UnityInput.Current.mousePosition.z;
-
-        if (UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey))
+        catch (Exception ex)
         {
-            _service.AddResizersAtCursor(x, y, z);
-            TextResizerEditorUi.Open();
+            Logger.LogError($"[TextResizer] Tick threw: {ex}");
         }
-
-        TextResizerEditorUi.Tick();
     }
 }

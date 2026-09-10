@@ -974,9 +974,13 @@ public class TextResizerService
         }
     }
 
-    private static TextAnchor? ConvertTMPAlignmentToTextAnchor(string tmpAlignment)
+    // The editor's Alignment dropdown offers both TMP's TextAlignmentOptions names and legacy
+    // Text's own TextAnchor names (see TextResizerEditorUi.AlignmentOptions), since a resizer's
+    // Path can't be known in advance to target one or the other. A legacy-native name (e.g.
+    // "UpperLeft") is used as-is; a TMP name is translated down to the nearest TextAnchor.
+    private static TextAnchor? ConvertTMPAlignmentToTextAnchor(string alignment)
     {
-        return tmpAlignment?.ToLower() switch
+        var fromTmpName = alignment?.ToLower() switch
         {
             "topleft" => TextAnchor.UpperLeft,
             "top" => TextAnchor.UpperCenter,
@@ -987,19 +991,44 @@ public class TextResizerService
             "bottomleft" => TextAnchor.LowerLeft,
             "bottom" => TextAnchor.LowerCenter,
             "bottomright" => TextAnchor.LowerRight,
-            _ => null
+            _ => (TextAnchor?)null
         };
+        if (fromTmpName.HasValue)
+            return fromTmpName;
+
+        // Not one of the TMP alignment names above - check whether it's already a legacy
+        // TextAnchor name (offered directly in the editor's merged Alignment dropdown).
+        if (Enum.TryParse<TextAnchor>(alignment, true, out var textAnchor))
+            return textAnchor;
+
+        return null;
     }
 
-    private static (HorizontalWrapMode?, VerticalWrapMode?) ConvertTMPOverflowToTextOverflow(string tmpOverflow)
+    // The editor's Overflow Mode dropdown offers both TMP's TextOverflowModes names and legacy
+    // Text's own HorizontalWrapMode/VerticalWrapMode names (see
+    // TextResizerEditorUi.OverflowModeOptions), since a resizer's Path can't be known in advance
+    // to target a TMP or legacy Text element. "Overflow"/"Truncate" are handled as TMP names
+    // first (setting both axes, matching pre-existing saved resizers) - only names unique to the
+    // legacy enums (e.g. "Wrap") fall through to being applied to their one native axis.
+    private static (HorizontalWrapMode?, VerticalWrapMode?) ConvertTMPOverflowToTextOverflow(string overflowMode)
     {
-        return tmpOverflow?.ToLower() switch
+        var fromTmpName = overflowMode?.ToLower() switch
         {
             "overflow" => (HorizontalWrapMode.Overflow, VerticalWrapMode.Overflow),
             "ellipsis" => (HorizontalWrapMode.Overflow, VerticalWrapMode.Truncate),
             "truncate" => (HorizontalWrapMode.Overflow, VerticalWrapMode.Truncate),
-            _ => (null, null)
+            _ => ((HorizontalWrapMode?, VerticalWrapMode?))(null, null)
         };
+        if (fromTmpName.Item1.HasValue || fromTmpName.Item2.HasValue)
+            return fromTmpName;
+
+        if (Enum.TryParse<HorizontalWrapMode>(overflowMode, true, out var horizontalWrapMode))
+            return (horizontalWrapMode, null);
+
+        if (Enum.TryParse<VerticalWrapMode>(overflowMode, true, out var verticalWrapMode))
+            return (null, verticalWrapMode);
+
+        return (null, null);
     }
 
     public static TextResizerContract FindAppropriateResizer(string path)

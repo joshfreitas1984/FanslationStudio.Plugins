@@ -1,4 +1,5 @@
-﻿using BepInEx;
+﻿using System;
+using BepInEx;
 using BepInEx.Unity.Mono;
 using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.SharpYaml;
@@ -46,27 +47,41 @@ public class TextResizerPlugin : BaseUnityPlugin
         _service = new TextResizerService(
             _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new MonoElementFinder());
         _service.Awake();
+
+        // Some hosts disable/deactivate freshly-injected plugin GameObjects/components shortly
+        // after chainloader startup, which silently stops MonoBehaviour.Update from ever firing
+        // again. Canvas.willRenderCanvases is a static engine event: subscribing to it doesn't
+        // add anything to the scene graph, so it isn't affected by that behaviour, and it fires
+        // every frame the game is about to render any canvas (which every TMPro/UGUI game does).
+        Canvas.willRenderCanvases += Tick;
     }
 
-    internal void Update()
+    private void Tick()
     {
         if (!_enabled)
             return;
 
-        _service.EnsurePatched();
-        _service.CheckForSceneChange();
+        try
+        {
+            _service.EnsurePatched();
+            _service.CheckForSceneChange();
 
-        if (UnityInput.Current.GetKeyDown(_reloadHotkey))
-            _service.Reload();
+            if (UnityInput.Current.GetKeyDown(_reloadHotkey))
+                _service.Reload();
 
-        if (UnityInput.Current.GetKeyDown(_addResizerHotKey))
-            _service.AddResizersForScene();
+            if (UnityInput.Current.GetKeyDown(_addResizerHotKey))
+                _service.AddResizersForScene();
 
-        var x = UnityInput.Current.mousePosition.x;
-        var y = UnityInput.Current.mousePosition.y;
-        var z = UnityInput.Current.mousePosition.z;
+            var x = UnityInput.Current.mousePosition.x;
+            var y = UnityInput.Current.mousePosition.y;
+            var z = UnityInput.Current.mousePosition.z;
 
-        if (UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey))
-            _service.AddResizersAtCursor(x, y, z);
+            if (UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey))
+                _service.AddResizersAtCursor(x, y, z);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"[TextResizer] Tick threw: {ex}");
+        }
     }
 }
