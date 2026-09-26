@@ -22,12 +22,12 @@ Defaults, changeable in `BepInEx/config/FanslationStudio.Plugins.UIEditor.cfg` (
 
 | Action | Default |
 | --- | --- |
-| Pick the element under the cursor | Alt + Mouse Forward |
+| Pick the element under the cursor | Alt + Middle Click |
 | Cycle through the elements under the cursor | Alt + Mouse Wheel (or Page Up / Page Down) |
 | Go to parent / child | `[` / `]` |
-| Clear the selection | Alt + 1 |
-| Show / hide the editor window | Alt + Mouse Back |
-| Reload layouts, sprites and resizers from disk | Alt + Middle Click |
+| Clear the selection | Alt + Mouse Forward |
+| Show / hide the editor window | Alt + 1 |
+| Reload layouts, sprites and resizers from disk | Alt + Mouse Back |
 
 Picking highlights the element (pink tint, outline and a status bar at the top) and opens the editor window. Hotkeys are ignored while you type in a text box.
 
