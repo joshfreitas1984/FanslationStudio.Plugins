@@ -44,7 +44,7 @@ jobs:
         run: dotnet pack FanslationStudio.Plugins.BepInEx6/FanslationStudio.Plugins.BepInEx6.csproj --configuration Release --no-build -p:Version=${{ steps.version.outputs.VERSION }} --output ./nuget
 
       - name: Pack NuGet - BepInEx6 IL2CPP
-        run: dotnet pack FanslationStudio.Plugins.BepInEx6/FanslationStudio.Plugins.BepInEx6.IL2CPP.csproj --configuration Release --no-build -p:Version=${{ steps.version.outputs.VERSION }} --output ./nuget
+        run: dotnet pack FanslationStudio.Plugins.BepInEx6.IL2CPP/FanslationStudio.Plugins.BepInEx6.IL2CPP.csproj --configuration Release --no-build -p:Version=${{ steps.version.outputs.VERSION }} --output ./nuget
 
       - name: Push NuGet packages
         shell: pwsh
@@ -70,7 +70,7 @@ jobs:
 
           $bep6Dir = "./release/bepinex6-il2cpp"
           New-Item -ItemType Directory -Path $bep6Dir -Force | Out-Null
-          Copy-Item "FanslationStudio.Plugins.BepInEx6.IL2CPP/bin/Release/netstandard2.1/FanslationStudio.Plugins.dll" "$bep6Dir/FanslationStudio.Plugins.BepInEx6.dll"
+          Copy-Item "FanslationStudio.Plugins.BepInEx6.IL2CPP/bin/Release/net6.0/FanslationStudio.Plugins.dll" "$bep6Dir/FanslationStudio.Plugins.BepInEx6.IL2CPP.dll"
           Compress-Archive -Path "$bep6Dir/*" -DestinationPath "./release/FanslationStudio.Plugins.BepInEx6.IL2CPP.zip"
 
       - name: Create git tag
