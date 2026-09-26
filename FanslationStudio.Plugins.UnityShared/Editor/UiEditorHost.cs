@@ -3,6 +3,7 @@ using System.IO;
 using FanslationStudio.Plugins.Layout;
 using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.Support;
+using FanslationStudio.Plugins.UnityShared.Editor.Tabs;
 using FanslationStudio.Plugins.UnityShared.Layout;
 
 namespace FanslationStudio.Plugins.UnityShared.Editor;
@@ -38,6 +39,16 @@ internal static class UiEditorHost
         _hotkeys = UiEditorHotkeys.Bind(config);
         PickerController.Configure(logger, _hotkeys);
 
+        var windowScale = config.Bind("Editor", "WindowScale", 1f,
+            "Size multiplier for the editor window (e.g. 1.5 on 4K screens)").Value;
+        var openOnPick = config.Bind("Editor", "OpenOnPick", true,
+            "Open the editor window automatically when you pick an element").Value;
+        EditorWindow.Configure(windowScale);
+        LayoutTab.AutoSave = config.Bind("Editor", "AutoSave", true,
+            "Save changed rules automatically when you move to another element, switch tab or close the window").Value;
+        if (openOnPick)
+            PickerController.Picked += EditorWindow.Open;
+
         if (_layoutsEnabled)
         {
             var repository = new ContractRepository<LayoutContract>(
@@ -66,7 +77,11 @@ internal static class UiEditorHost
                 LayoutApplier.Tick();
             }
 
+            if (_hotkeys.ToggleWindow.IsDown() && !EditorWindow.IsTyping)
+                EditorWindow.Toggle();
+
             PickerController.Tick();
+            EditorWindow.Tick();
             _lastError = null;
         }
         catch (Exception ex)

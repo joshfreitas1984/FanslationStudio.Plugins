@@ -179,6 +179,85 @@ internal static class LayoutApplier
         return rect != null && _states.TryGetValue(rect.GetInstanceID(), out var state) && state.Applied != null;
     }
 
+    /// <summary>The element's values before any rule touched it (its live values if none has).</summary>
+    public static LayoutSnapshot GetOriginal(RectTransform rect)
+    {
+        if (_states.TryGetValue(rect.GetInstanceID(), out var state))
+        {
+            return new LayoutSnapshot
+            {
+                AnchorMin = state.AnchorMin, AnchorMax = state.AnchorMax, Pivot = state.Pivot,
+                AnchoredPosition = state.AnchoredPosition, SizeDelta = state.SizeDelta,
+                LocalPosition = state.LocalPosition, LocalScale = state.LocalScale, LocalEuler = state.LocalEuler,
+            };
+        }
+
+        return new LayoutSnapshot
+        {
+            AnchorMin = rect.anchorMin, AnchorMax = rect.anchorMax, Pivot = rect.pivot,
+            AnchoredPosition = rect.anchoredPosition, SizeDelta = rect.sizeDelta,
+            LocalPosition = rect.localPosition, LocalScale = rect.localScale, LocalEuler = rect.localEulerAngles,
+        };
+    }
+
+    /// <summary>
+    /// Re-applies rules to the elements affected by a change to the given path patterns (e.g. a
+    /// rule being edited, renamed or deleted), without a full rescan when the patterns are exact
+    /// paths. <paramref name="hint"/> is an element known to be affected (the selection).
+    /// </summary>
+    public static void Refresh(IList<string> patterns, RectTransform hint)
+    {
+        if (_repository == null)
+            return;
+
+        bool Matches(string path)
+        {
+            foreach (var pattern in patterns)
+            {
+                if (!string.IsNullOrEmpty(pattern) && PathPattern.IsMatch(pattern, path))
+                    return true;
+            }
+            return false;
+        }
+
+        foreach (var state in new List<ElementState>(_states.Values))
+        {
+            if (state.Rect == null || !Matches(state.Path))
+                continue;
+
+            Revert(state);
+            var contract = _repository.Find(state.Path);
+            if (contract != null)
+                Apply(state.Rect, contract, state.Path);
+        }
+
+        var anyWildcard = false;
+        foreach (var pattern in patterns)
+            anyWildcard |= PathPattern.IsWildcard(pattern);
+
+        if (anyWildcard)
+        {
+            foreach (var rect in UiCompat.FindObjectsOfType<RectTransform>())
+            {
+                if (rect == null || IsApplied(rect))
+                    continue;
+                var path = ObjectHelper.GetGameObjectPath(rect.gameObject);
+                if (!Matches(path))
+                    continue;
+                var contract = _repository.Find(path);
+                if (contract != null)
+                    Apply(rect, contract, path);
+            }
+        }
+        else if (hint != null && !IsApplied(hint))
+        {
+            var path = ObjectHelper.GetGameObjectPath(hint.gameObject);
+            var contract = _repository.Find(path);
+            if (contract != null)
+                Apply(hint, contract, path);
+        }
+    }
+
     public static void Apply(RectTransform rect, LayoutContract contract, string path)
     {
         if (rect == null || contract == null)
@@ -557,4 +636,11 @@ internal static class LayoutApplier
     private static float[] ToArray(Vector2 value) => new[] { value.x, value.y };
     private static Vector2 ToVector2(float[] value) => new Vector2(value[0], value[1]);
     private static Vector3 ToVector3(float[] value) => new Vector3(value[0], value[1], value[2]);
+}
+
+/// <summary>An element's RectTransform values at a point in time.</summary>
+internal struct LayoutSnapshot
+{
+    public Vector2 AnchorMin, AnchorMax, Pivot, AnchoredPosition, SizeDelta;
+    public Vector3 LocalPosition, LocalScale, LocalEuler;
 }

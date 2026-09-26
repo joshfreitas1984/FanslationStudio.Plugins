@@ -136,6 +136,22 @@ public class ContractRepositoryTests
     }
 
     [Fact]
+    public void DiscardPreview_RemovesPreviewOnlyEntries_NeverSavedOnes()
+    {
+        var (repo, folder) = Create(("a.yaml", [new() { Path = "Canvas/Saved" }]));
+        repo.Preview(new LayoutContract { Path = "Canvas/Draft" });
+        repo.Preview(new LayoutContract { Path = "Canvas/Saved", RotationZ = 5 });
+
+        Assert.True(repo.DiscardPreview("Canvas/Draft"));
+        Assert.False(repo.DiscardPreview("Canvas/Saved"));
+        Assert.False(repo.DiscardPreview("Canvas/Missing"));
+
+        Assert.Null(repo.Find("Canvas/Draft"));
+        Assert.NotNull(repo.Find("Canvas/Saved"));
+        Assert.Single(Read(folder, "a.yaml"));
+    }
+
+    [Fact]
     public void Preview_InvalidatesWildcardCache()
     {
         var (repo, _) = Create(("a.yaml", [new() { Path = "Canvas/A" }]));

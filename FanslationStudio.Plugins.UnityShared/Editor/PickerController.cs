@@ -27,6 +27,11 @@ internal static class PickerController
     /// <summary>Raised when the selection changes (null when cleared).</summary>
     public static event Action<PickedElement> SelectionChanged;
 
+    /// <summary>Raised after the pick hotkey collects a new stack.</summary>
+    public static event Action Picked;
+
+    public static UiEditorHotkeys Hotkeys => _hotkeys;
+
     public static PickedElement Selected => _selected != null && _selected.IsAlive ? _selected : null;
     public static IReadOnlyList<PickedElement> Stack => _stack;
     public static int StackIndex => _stackIndex;
@@ -47,10 +52,10 @@ internal static class PickerController
         else if (_hotkeys.Pick.IsDown())
             PickAt(input.mousePosition);
 
-        if (_stack.Count > 0 || _selected != null)
+        // Navigation keys ([ ] PageUp/PageDown) are ordinary typing while a field has focus.
+        if ((_stack.Count > 0 || _selected != null) && !EditorWindow.IsTyping)
         {
-            var ctrlHeld = input.GetKey(KeyCode.LeftControl) || input.GetKey(KeyCode.RightControl);
-            var scroll = ctrlHeld ? input.mouseScrollDelta.y : 0f;
+            var scroll = IsWheelModifierHeld(input) ? GetScroll(input) : 0f;
 
             if (_hotkeys.Next.IsDown() || scroll < 0f)
                 Cycle(1);
@@ -74,6 +79,41 @@ internal static class PickerController
         }
     }
 
+    private static string CycleText()
+    {
+        var keys = $"{UiEditorHotkeys.Describe(_hotkeys.Previous)} / {UiEditorHotkeys.Describe(_hotkeys.Next)}";
+        return _hotkeys.WheelText != null ? $"{_hotkeys.WheelText} or {keys}" : keys;
+    }
+
+    private static bool IsWheelModifierHeld(IInputSystem input)
+    {
+        var modifier = _hotkeys.WheelModifier;
+        if (modifier == KeyCode.None)
+            return false;
+        return input.GetKey(modifier) || input.GetKey(OtherSide(modifier));
+    }
+
+    private static KeyCode OtherSide(KeyCode key)
+    {
+        switch (key)
+        {
+            case KeyCode.LeftShift: return KeyCode.RightShift;
+            case KeyCode.RightShift: return KeyCode.LeftShift;
+            case KeyCode.LeftControl: return KeyCode.RightControl;
+            case KeyCode.RightControl: return KeyCode.LeftControl;
+            case KeyCode.LeftAlt: return KeyCode.RightAlt;
+            case KeyCode.RightAlt: return KeyCode.LeftAlt;
+            default: return key;
+        }
+    }
+
+    // Some platforms report Shift+wheel as horizontal scrolling, so accept either axis.
+    private static float GetScroll(IInputSystem input)
+    {
+        var delta = input.mouseScrollDelta;
+        return Mathf.Abs(delta.y) >= Mathf.Abs(delta.x) ? delta.y : delta.x;
+    }
+
     public static void PickAt(Vector2 screenPoint)
     {
         _stack = ElementPicker.PickAt(screenPoint);
@@ -90,6 +130,7 @@ internal static class PickerController
         }
 
         SelectStackIndex(0);
+        Picked?.Invoke();
     }
 
     public static void Cycle(int direction)
@@ -181,7 +222,8 @@ internal static class PickerController
         var position = _stackIndex >= 0 ? $"{_stackIndex + 1}/{_stack.Count}" : "–";
         HighlightOverlay.Show(selected.RectTransform,
             $"[{position}] {selected}   {PickedElement.Truncate(selected.Path, 90)}   " +
-            $"({_hotkeys.Next.MainKey}/{_hotkeys.Previous.MainKey} or Ctrl+Wheel: cycle, " +
-            $"{_hotkeys.Parent.MainKey}/{_hotkeys.Child.MainKey}: parent/child, {_hotkeys.Clear}: clear)");
+            $"({CycleText()}: cycle, " +
+            $"{UiEditorHotkeys.Describe(_hotkeys.Parent)} / {UiEditorHotkeys.Describe(_hotkeys.Child)}: parent/child, " +
+            $"{UiEditorHotkeys.Describe(_hotkeys.Clear)}: clear)");
     }
 }

@@ -143,6 +143,18 @@ public class ContractRepository<T> where T : class
         Version++;
     }
 
+    /// <summary>Drops an entry that only exists as a preview (never saved). Saved entries are kept.</summary>
+    public bool DiscardPreview(string path)
+    {
+        if (path == null || !_entries.ContainsKey(path) || _sourceFiles.ContainsKey(path))
+            return false;
+
+        RemoveEntry(path);
+        _matchCache.Clear();
+        Version++;
+        return true;
+    }
+
     /// <summary>
     /// Creates or updates an entry and rewrites the file that owns it.
     /// </summary>
