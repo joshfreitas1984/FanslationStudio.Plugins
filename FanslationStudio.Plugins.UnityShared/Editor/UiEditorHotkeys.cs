@@ -81,7 +81,7 @@ internal sealed class UiEditorHotkeys
             Child = config.Bind("Hotkeys", "SelectChild", defaults.Child,
                 "Selects a child of the current element (walks back down after SelectParent)").Value,
             Reload = config.Bind("Hotkeys", "ReloadAll", defaults.Reload,
-                "Reloads layout files from disk and re-applies them").Value,
+                "Reloads layout, sprite and resizer files from disk and re-applies them").Value,
             ToggleWindow = config.Bind("Hotkeys", "ToggleWindow", defaults.ToggleWindow,
                 "Shows or hides the editor window").Value,
             WheelModifier = config.Bind("Hotkeys", "WheelModifier", defaults.WheelModifier,

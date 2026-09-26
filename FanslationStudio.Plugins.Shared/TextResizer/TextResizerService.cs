@@ -23,9 +23,8 @@ public class TextResizerService
     public static Dictionary<string, TextResizerContract> Resizers = [];
 
     // Incremented whenever a resizer is added, removed, or renamed (i.e. whenever the set of keys
-    // in Resizers changes) - never on in-place edits (PreviewResizer/typing). The editor UI polls
-    // this each frame to detect resizers added out-of-band via hotkeys (AddResizersForScene/
-    // AddResizersAtCursor) or Reload, and refreshes its list without needing to be closed/reopened.
+    // in Resizers changes) - never on in-place edits (PreviewResizer/typing). The editor's Rules
+    // list polls this to refresh after saves, deletes and reloads.
     public static int ResizersVersion = 0;
 
     // Tracks which yaml file each resizer came from (an absolute file path), so edits/deletes
@@ -33,12 +32,6 @@ public class TextResizerService
     // zzAddedResizers.yaml. Resizers found across multiple files are supported - each file is
     // rewritten independently based on which resizer paths currently point at it.
     public static Dictionary<string, string> ResizerSourceFiles = [];
-
-    // Set to the Path of the most recently hotkey-added resizer (AddResizersForScene/
-    // AddResizersAtCursor), so the editor UI can automatically select it once opened/refreshed.
-    // Not set for the initial bulk LoadResizers/Reload. Consumed (read then reset to null) by the
-    // editor UI, so it only triggers an auto-select once per addition.
-    public static string LastAddedResizerPath;
 
     // Cache for storing previously matched results
     public static Dictionary<string, TextResizerContract> CachedMatchedResizers = [];
@@ -129,33 +122,6 @@ public class TextResizerService
         ApplyAllResizers();
     }
 
-    public void Reload()
-    {
-        LoadResizers();
-        ApplyAllResizers();
-        _logger.LogWarning("Resizers Reloaded");
-    }
-
-    public void AddResizersForScene()
-    {
-        _logger.LogWarning("Adding Resizers for Scene");
-        LastAddedResizerPath = null;
-        var tmpElements = FindAllTextElements();
-        var textElements = FindAllLegacyTextElements();
-        AddTextElementsToResizers(tmpElements);
-        AddLegacyTextElementsToResizers(textElements);
-    }
-
-    public void AddResizersAtCursor(float x, float y, float z)
-    {
-        _logger.LogWarning("Adding Resizers at Cursor");
-        LastAddedResizerPath = null;
-        var tmpElements = FindTextElementsUnderCursor(x, y, z);
-        var textElements = FindLegacyTextElementsUnderCursor(x, y, z);
-        AddTextElementsToResizers(tmpElements, addUnderCursor: true);
-        AddLegacyTextElementsToResizers(textElements, addUnderCursor: true);
-    }
-
     public void LoadResizers()
     {
         ResizersLoaded = false;
@@ -185,7 +151,7 @@ public class TextResizerService
         ResizersLoaded = true;
     }
 
-    private void AddFoundResizers(List<TextResizerContract> newResizers, string sourceFile, bool trackLastAdded = false)
+    private void AddFoundResizers(List<TextResizerContract> newResizers, string sourceFile)
     {
         foreach (var newResizer in newResizers)
         {
@@ -194,9 +160,6 @@ public class TextResizerService
                 Resizers.Add(newResizer.Path, newResizer);
                 ResizerSourceFiles[newResizer.Path] = sourceFile;
                 ResizersVersion++;
-
-                if (trackLastAdded)
-                    LastAddedResizerPath = newResizer.Path;
             }
         }
     }
@@ -343,8 +306,7 @@ public class TextResizerService
     }
 
     // Rewrites a single yaml file from scratch based on the resizers currently mapped to it in
-    // ResizerSourceFiles - never appends raw serialized text (the previous approach in
-    // AddTextElementsToResizers/AddLegacyTextElementsToResizers), since blind string appends to a
+    // ResizerSourceFiles - never appends raw serialized text, since blind string appends to a
     // yaml list can produce invalid/duplicate documents and can't support in-place edits/deletes.
     private void RewriteFile(string file)
     {
@@ -355,112 +317,6 @@ public class TextResizerService
 
         var content = entries.Count > 0 ? _yamlHelper.Serialize(entries) : string.Empty;
         File.WriteAllText(file, content);
-    }
-
-    public TextMeshProUGUI[] FindTextElementsUnderCursor(float x, float y, float z)
-    {
-        // Create a 10x10 pixel area around the cursor (20 pixel buffer on each side)
-        var cursorArea = new Rect(x - 10, y - 10, 20, 20);
-
-        // Find all TextMeshProUGUI components in the scene. Delegates to the host-specific
-        // attacher rather than calling FindObjectsOfType<T>() directly - see FindAllTextElements.
-        var textElements = FindAllTextElements();
-
-        // Temporary diagnostic logging to help track down why cursor-based lookup wasn't
-        // matching anything - remove once confirmed working.
-        _logger.LogDebug($"[CursorDebug] FindTextElementsUnderCursor: mouse=({x},{y}), cursorArea={cursorArea}, candidateCount={textElements.Length}");
-
-        var responseElements = new List<TextMeshProUGUI>();
-
-        foreach (TextMeshProUGUI textElement in textElements)
-        {
-            // Get the RectTransform to check if it contains the cursor position
-            var rectTransform = textElement.rectTransform;
-            if (rectTransform == null) continue;
-
-            // Check if the text element's screen rect overlaps with our cursor area
-            Canvas canvas = textElement.canvas;
-            if (canvas == null) continue;
-
-            // Get the screen rect of the text element. RectTransformUtility.PixelAdjustRect()
-            // returns a rect in the canvas's local space, which for ScreenSpaceOverlay canvases
-            // is centered at (0,0) rather than starting at (0,0) like screen coordinates - using
-            // it directly here would never match the raw mouse screen position. Instead, always
-            // convert the element's world corners to screen space via
-            // RectTransformUtility.WorldToScreenPoint, which correctly handles a null camera for
-            // overlay canvases.
-            Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
-
-            // rectTransform.GetWorldCorners(Vector3[]) throws MissingMethodException at
-            // runtime under IL2CPP when called from Shared - delegate to the host-specific
-            // attacher (see IBehaviourAttacher/.github/copilot-instructions.md item 4).
-            Vector3[] corners = _behaviourAttacher.GetWorldCorners(rectTransform);
-
-            // Convert world corners to screen points
-            Vector2 min = RectTransformUtility.WorldToScreenPoint(camera, corners[0]);
-            Vector2 max = RectTransformUtility.WorldToScreenPoint(camera, corners[2]);
-            Rect screenRect = new Rect(min.x, min.y, max.x - min.x, max.y - min.y);
-
-            var overlaps = screenRect.Overlaps(cursorArea);
-            _logger.LogDebug($"[CursorDebug] '{textElement.text}' canvas={canvas.name} renderMode={canvas.renderMode} camera={(camera == null ? "null" : camera.name)} corners0={corners[0]} corners2={corners[2]} screenRect={screenRect} overlaps={overlaps}");
-
-            // Check if the cursor area overlaps with the text element's screen rect
-            if (overlaps)
-                responseElements.Add(textElement);
-        }
-
-        return responseElements.ToArray();
-    }
-
-    public Text[] FindLegacyTextElementsUnderCursor(float x, float y, float z)
-    {
-        // Create a 10x10 pixel area around the cursor (20 pixel buffer on each side)
-        var cursorArea = new Rect(x - 10, y - 10, 20, 20);
-
-        // Find all Text components in the scene. Delegates to the host-specific attacher rather
-        // than calling FindObjectsOfType<T>() directly - see FindAllLegacyTextElements.
-        var textElements = FindAllLegacyTextElements();
-
-        // Temporary diagnostic logging to help track down why cursor-based lookup wasn't
-        // matching anything - remove once confirmed working.
-        _logger.LogDebug($"[CursorDebug] FindLegacyTextElementsUnderCursor: mouse=({x},{y}), cursorArea={cursorArea}, candidateCount={textElements.Length}");
-
-        var responseElements = new List<Text>();
-
-        foreach (Text textElement in textElements)
-        {
-            // Get the RectTransform to check if it contains the cursor position
-            var rectTransform = textElement.rectTransform;
-            if (rectTransform == null) continue;
-
-            // Check if the text element's screen rect overlaps with our cursor area
-            Canvas canvas = textElement.canvas;
-            if (canvas == null) continue;
-
-            // Get the screen rect of the text element. See the comment in
-            // FindTextElementsUnderCursor above for why we always convert via world corners
-            // rather than using PixelAdjustRect's canvas-local-space rect directly.
-            Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
-
-            // rectTransform.GetWorldCorners(Vector3[]) throws MissingMethodException at
-            // runtime under IL2CPP when called from Shared - delegate to the host-specific
-            // attacher (see IBehaviourAttacher/.github/copilot-instructions.md item 4).
-            Vector3[] corners = _behaviourAttacher.GetWorldCorners(rectTransform);
-
-            // Convert world corners to screen points
-            Vector2 min = RectTransformUtility.WorldToScreenPoint(camera, corners[0]);
-            Vector2 max = RectTransformUtility.WorldToScreenPoint(camera, corners[2]);
-            Rect screenRect = new Rect(min.x, min.y, max.x - min.x, max.y - min.y);
-
-            var overlaps = screenRect.Overlaps(cursorArea);
-            _logger.LogDebug($"[CursorDebug] '{textElement.text}' canvas={canvas.name} renderMode={canvas.renderMode} camera={(camera == null ? "null" : camera.name)} corners0={corners[0]} corners2={corners[2]} screenRect={screenRect} overlaps={overlaps}");
-
-            // Check if the cursor area overlaps with the text element's screen rect
-            if (overlaps)
-                responseElements.Add(textElement);
-        }
-
-        return responseElements.ToArray();
     }
 
     public static TextMeshProUGUI[] FindAllTextElements()
@@ -475,91 +331,6 @@ public class TextResizerService
     {
         // Same reason as FindAllTextElements above.
         return _behaviourAttacher.FindAllLegacyTextElements();
-    }
-
-    public void AddTextElementsToResizers(TextMeshProUGUI[] textElements, bool addUnderCursor = false, bool copyUnderCursor = false)
-    {
-        var foundResizers = new List<TextResizerContract>();
-
-        foreach (TextMeshProUGUI textElement in textElements)
-        {
-            // Log information about the text element
-            var path = ObjectHelper.GetGameObjectPath(textElement.gameObject);
-            //Logger.LogDebug($"Found text element: {path}");
-
-            if (!Resizers.ContainsKey(path))
-            {
-                // Create a new resizer contract for this text element
-                var newResizer = new TextResizerContract()
-                {
-                    Path = path,
-                    SampleText = textElement.text,
-                    IdealFontSize = textElement.fontSize,
-                    //AllowAutoSizing = textElement.enableAutoSizing,
-                    AllowWordWrap = textElement.enableWordWrapping,
-                    //Alignment = textElement.alignment.ToString(),
-                    //OverflowMode = textElement.overflowMode.ToString(),
-                    //Add More if we want more
-                    AllowLeftTrimText = false, //Want to serialise
-                };
-
-                foundResizers.Add(newResizer);
-            }
-        }
-
-        if (foundResizers.Count > 0)
-        {
-            var addedResizersFile = Path.Combine(_resizerFolder, "zzAddedResizers.yaml");
-
-            _logger.LogWarning($"Writing to {addedResizersFile}");
-
-            AddFoundResizers(foundResizers, addedResizersFile, trackLastAdded: true);
-            RewriteFile(addedResizersFile);
-        }
-        else
-        {
-            _logger.LogDebug("No new TextMeshProUGUI elements found in scene");
-        }
-    }
-
-    public void AddLegacyTextElementsToResizers(Text[] textElements, bool addUnderCursor = false, bool copyUnderCursor = false)
-    {
-        var foundResizers = new List<TextResizerContract>();
-
-        foreach (Text textElement in textElements)
-        {
-            // Log information about the text element
-            var path = ObjectHelper.GetGameObjectPath(textElement.gameObject);
-
-            if (!Resizers.ContainsKey(path))
-            {
-                // Create a new resizer contract for this text element
-                var newResizer = new TextResizerContract()
-                {
-                    Path = path,
-                    SampleText = textElement.text,
-                    IdealFontSize = textElement.fontSize,
-                    AllowWordWrap = textElement.horizontalOverflow == HorizontalWrapMode.Wrap,
-                    AllowLeftTrimText = false,
-                };
-
-                foundResizers.Add(newResizer);
-            }
-        }
-
-        if (foundResizers.Count > 0)
-        {
-            var addedResizersFile = Path.Combine(_resizerFolder, "zzAddedResizers.yaml");
-
-            _logger.LogWarning($"Writing to {addedResizersFile}");
-
-            AddFoundResizers(foundResizers, addedResizersFile, trackLastAdded: true);
-            RewriteFile(addedResizersFile);
-        }
-        else
-        {
-            _logger.LogDebug("No new UI.Text elements found in scene");
-        }
     }
 
     public static void ApplyResizing(TextMeshProUGUI textComponent)
@@ -1022,7 +793,7 @@ public class TextResizerService
     }
 
     // The editor's Alignment dropdown offers both TMP's TextAlignmentOptions names and legacy
-    // Text's own TextAnchor names (see TextResizerEditorUi.AlignmentOptions), since a resizer's
+    // Text's own TextAnchor names (see the UI Editor's TextTab.AlignmentOptions), since a resizer's
     // Path can't be known in advance to target one or the other. A legacy-native name (e.g.
     // "UpperLeft") is used as-is; a TMP name is translated down to the nearest TextAnchor.
     private static TextAnchor? ConvertTMPAlignmentToTextAnchor(string alignment)
@@ -1053,7 +824,7 @@ public class TextResizerService
 
     // The editor's Overflow Mode dropdown offers both TMP's TextOverflowModes names and legacy
     // Text's own HorizontalWrapMode/VerticalWrapMode names (see
-    // TextResizerEditorUi.OverflowModeOptions), since a resizer's Path can't be known in advance
+    // TextTab.OverflowOptions), since a resizer's Path can't be known in advance
     // to target a TMP or legacy Text element. "Overflow"/"Truncate" are handled as TMP names
     // first (setting both axes, matching pre-existing saved resizers) - only names unique to the
     // legacy enums (e.g. "Wrap") fall through to being applied to their one native axis.

@@ -63,6 +63,7 @@ internal sealed class LayoutTab : IEditorTab
         {
             rules.Add(new RuleSummary
             {
+                Key = rule.Path,
                 Path = rule.Path,
                 Description = rule.Name,
                 File = Path.GetFileName(repository.GetSourceFile(rule.Path) ?? "(unsaved)"),

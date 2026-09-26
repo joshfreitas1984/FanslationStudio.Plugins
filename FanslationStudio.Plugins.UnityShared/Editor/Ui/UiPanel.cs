@@ -11,7 +11,7 @@ namespace FanslationStudio.Plugins.UnityShared.Editor.Ui;
 /// Interaction is polled rather than event-driven: buttons are hit-tested against the mouse
 /// position and inputs are diffed against their last-seen text every frame. UnityEvent
 /// listeners (Button.onClick, InputField.onValueChanged) are avoided on purpose - subscribing
-/// interop delegates is a crash risk under IL2CPP (see TextResizerEditorUi).
+/// interop delegates is a crash risk under IL2CPP (see .github/copilot-instructions.md).
 ///
 /// Coordinates are (x, y) from the panel's top-left, y growing downwards.
 /// </summary>
@@ -149,6 +149,19 @@ internal sealed class UiPanel
         go.transform.SetParent(Rect, false);
         var image = UiCompat.AddComponent<Image>(go);
         image.color = color;
+        image.raycastTarget = false;
+        PlaceTopLeft(UiCompat.GetRectTransform(go), x, y, width, height);
+        return image;
+    }
+
+    /// <summary>Shows a sprite, letterboxed to fit.</summary>
+    public Image Picture(Sprite sprite, float x, float y, float width, float height)
+    {
+        var go = new GameObject("Picture");
+        go.transform.SetParent(Rect, false);
+        var image = UiCompat.AddComponent<Image>(go);
+        image.sprite = sprite;
+        image.preserveAspect = true;
         image.raycastTarget = false;
         PlaceTopLeft(UiCompat.GetRectTransform(go), x, y, width, height);
         return image;

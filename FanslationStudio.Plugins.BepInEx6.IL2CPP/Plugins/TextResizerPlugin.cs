@@ -1,6 +1,5 @@
-﻿using BepInEx;
+using BepInEx;
 using BepInEx.Unity.IL2CPP;
-using BepInEx.Unity.IL2CPP.Configuration;
 using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.SharpYaml;
 using FanslationStudio.Plugins.TextResizer;
@@ -18,30 +17,12 @@ public class TextResizerPlugin : BasePlugin
     private static TextResizerService _service;
     private static bool _enabled = true;
 
-    private static KeyboardShortcut AddResizerAtCursorHotKey;
-    private static KeyboardShortcut ReloadHotkey;
-    private static KeyboardShortcut AddResizerHotKey;
-
     public override void Load()
     {
         _enabled = Config.Bind("General",
             "TextResizerEnabled",
             true,
             "Enable Text Resizer plugin").Value;
-
-        // KeyboardShortcut has a built-in BepInEx TOML converter, so it can be bound directly.
-        AddResizerAtCursorHotKey = Config.Bind("Hotkeys",
-            "AddResizerAtCursorHotKey",
-            new KeyboardShortcut(KeyCode.KeypadDivide),
-            "Adds a text resizer at the cursor position").Value;
-        ReloadHotkey = Config.Bind("Hotkeys",
-            "ReloadHotkey",
-            new KeyboardShortcut(KeyCode.KeypadPlus),
-            "Reloads the text resizer configuration").Value;
-        AddResizerHotKey = Config.Bind("Hotkeys",
-            "AddResizerHotKey",
-            new KeyboardShortcut(KeyCode.KeypadMultiply),
-            "Adds text resizers for every element in the current scene").Value;
 
         _logger = new BepInEx6Logger(base.Log);
         _logger.LogInfo($"[TextResizer DEBUG] Load() called, _enabled={_enabled}");
@@ -52,8 +33,6 @@ public class TextResizerPlugin : BasePlugin
         _service = new TextResizerService(
             _logger, _enabled, Paths.BepInExRootPath, new YamlHelper(), new Il2CppElementFinder());
         _service.Awake();
-
-        TextResizerEditorUi.Configure(_service);
 
         // BasePlugin (unlike Mono's BaseUnityPlugin) is a plain C# class - Unity never calls
         // Update() on it directly. Every attempt to get a tick via a *generic* Il2Cpp interop
@@ -123,27 +102,6 @@ public class TextResizerPlugin : BasePlugin
             _service.EnsurePatched();
             TextResizerGameObjectPatches.EnsurePatched();
             _service.CheckForSceneChange();
-
-            if (ReloadHotkey.IsDown())
-                _service.Reload();
-
-            if (AddResizerHotKey.IsDown())
-            {
-                _service.AddResizersForScene();
-                TextResizerEditorUi.Open();
-            }
-
-            var x = UnityInput.Current.mousePosition.x;
-            var y = UnityInput.Current.mousePosition.y;
-            var z = UnityInput.Current.mousePosition.z;
-
-            if (AddResizerAtCursorHotKey.IsDown())
-            {
-                _service.AddResizersAtCursor(x, y, z);
-                TextResizerEditorUi.Open();
-            }
-
-            TextResizerEditorUi.Tick();
         }
         catch (Exception ex)
         {

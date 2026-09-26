@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using BepInEx;
 using BepInEx.Unity.Mono;
 using FanslationStudio.Plugins.Shared;
@@ -15,30 +15,12 @@ public class TextResizerPlugin : BaseUnityPlugin
     private static TextResizerService _service;
     private static bool _enabled = true;
 
-    private KeyCode _addResizerAtCursorHotKey;
-    private KeyCode _reloadHotkey;
-    private KeyCode _addResizerHotKey;
-
-
     private void Awake()
     {
         _enabled = Config.Bind("General",
             "TextResizerEnabled",
             true,
             "Enable Text Resizer plugin").Value;
-
-        _addResizerAtCursorHotKey = Config.Bind("Hotkeys",
-            "AddResizerAtCursorHotKey",
-            KeyCode.KeypadMinus,
-            "Adds a text resizer at the cursor position").Value;
-        _reloadHotkey = Config.Bind("Hotkeys",
-            "ReloadHotkey",
-            KeyCode.KeypadPlus,
-            "Reloads the text resizer configuration").Value;
-        _addResizerHotKey = Config.Bind("Hotkeys",
-            "AddResizerHotKey",
-            KeyCode.KeypadMultiply,
-            "Adds text resizers for every element in the current scene").Value;
 
         if (!_enabled)
             return;
@@ -65,19 +47,6 @@ public class TextResizerPlugin : BaseUnityPlugin
         {
             _service.EnsurePatched();
             _service.CheckForSceneChange();
-
-            if (UnityInput.Current.GetKeyDown(_reloadHotkey))
-                _service.Reload();
-
-            if (UnityInput.Current.GetKeyDown(_addResizerHotKey))
-                _service.AddResizersForScene();
-
-            var x = UnityInput.Current.mousePosition.x;
-            var y = UnityInput.Current.mousePosition.y;
-            var z = UnityInput.Current.mousePosition.z;
-
-            if (UnityInput.Current.GetKeyDown(_addResizerAtCursorHotKey))
-                _service.AddResizersAtCursor(x, y, z);
         }
         catch (Exception ex)
         {

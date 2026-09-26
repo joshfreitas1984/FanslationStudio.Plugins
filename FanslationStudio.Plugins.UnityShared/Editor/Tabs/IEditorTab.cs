@@ -6,6 +6,8 @@ namespace FanslationStudio.Plugins.UnityShared.Editor.Tabs;
 /// <summary>A saved rule, as listed in the window's Rules mode.</summary>
 internal sealed class RuleSummary
 {
+    /// <summary>Unique id within the tab (usually the path; sprite rules add the sprite name).</summary>
+    public string Key;
     public string Path;
     public string Description;
     public string File;
@@ -21,11 +23,11 @@ internal interface IEditorTab
     bool IsAvailable(PickedElement element);
 
     /// <summary>
-    /// Builds the tab's widgets into an empty panel. Edits the rule at <paramref name="rulePath"/>
+    /// Builds the tab's widgets into an empty panel. Edits the rule with key <paramref name="ruleKey"/>
     /// if given, otherwise the rule that applies to the element. <paramref name="element"/> is
     /// null when the rule has no matching element on screen.
     /// </summary>
-    void Build(UiPanel panel, PickedElement element, string rulePath);
+    void Build(UiPanel panel, PickedElement element, string ruleKey);
 
     /// <summary>Called every frame while the tab is shown (e.g. for throttled previews).</summary>
     void Tick();
@@ -37,7 +39,7 @@ internal interface IEditorTab
     /// <summary>Every saved rule of this tab's kind, in file order.</summary>
     IReadOnlyList<RuleSummary> ListRules();
 
-    /// <summary>Path of the saved rule currently open, if any (highlighted in the Rules list).</summary>
+    /// <summary>Key of the saved rule currently open, if any (highlighted in the Rules list).</summary>
     string EditingRulePath { get; }
 
     /// <summary>Changes whenever this tab's rules change, so the Rules list can refresh.</summary>

@@ -40,7 +40,7 @@ internal static class EditorWindow
     {
         new LayoutTab(),
         new TextTab(),
-        new PlaceholderTab("Sprite", "Sprite dump/replace moves here next."),
+        new SpriteTab(),
     };
 
     private static float _scale = 1f;
@@ -338,9 +338,9 @@ internal static class EditorWindow
             var listed = rules[i];
             var rule = listed.Rule;
             var tab = _tabs[listed.TabIndex];
-            var isOpen = tab == openTab && rule.Path == tab.EditingRulePath;
+            var isOpen = tab == openTab && rule.Key == tab.EditingRulePath;
 
-            _listBody.Button(string.Empty, 0, y, width, rowHeight, () => OpenRule(listed.TabIndex, rule.Path),
+            _listBody.Button(string.Empty, 0, y, width, rowHeight, () => OpenRule(listed.TabIndex, rule.Key, rule.Path),
                 isOpen ? UiPanel.SelectedColor : UiPanel.MutedButtonColor);
             _listBody.Box(4, y + 7, badgeWidth, badgeWidth, BadgeColors[listed.TabIndex % BadgeColors.Length]);
             _listBody.Label(tab.Title.Substring(0, 1), 4, y + 7, badgeWidth, badgeWidth, 12, TextAnchor.MiddleCenter,
@@ -423,11 +423,11 @@ internal static class EditorWindow
     /// Opens a saved rule from the Rules list. If an element it applies to is on screen, that
     /// element is selected (and outlined); otherwise the rule is edited on its own.
     /// </summary>
-    private static void OpenRule(int tabIndex, string rulePath)
+    private static void OpenRule(int tabIndex, string ruleKey, string rulePath)
     {
         LeaveTab();
         _tabIndex = tabIndex;
-        _openRulePath = rulePath;
+        _openRulePath = ruleKey;
 
         var element = FindElementForRule(rulePath);
         if (element != null)
@@ -655,26 +655,5 @@ internal static class EditorWindow
         Object.DontDestroyOnLoad(go);
         UiCompat.AddComponent<EventSystem>(go);
         UiCompat.AddComponent<StandaloneInputModule>(go);
-    }
-
-    private sealed class PlaceholderTab : IEditorTab
-    {
-        private readonly string _message;
-
-        public PlaceholderTab(string title, string message)
-        {
-            Title = title;
-            _message = message;
-        }
-
-        public string Title { get; }
-        public bool IsAvailable(PickedElement element) => false;
-        public void Build(UiPanel panel, PickedElement element, string rulePath) =>
-            panel.Label(_message, 0, 0, panel.Width, 40, 13, TextAnchor.UpperLeft, UiPanel.DimTextColor);
-        public void Tick() { }
-        public void Leave() { }
-        public IReadOnlyList<RuleSummary> ListRules() => new RuleSummary[0];
-        public string EditingRulePath => null;
-        public int RulesVersion => 0;
     }
 }

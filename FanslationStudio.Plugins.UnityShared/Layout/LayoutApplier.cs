@@ -18,7 +18,7 @@ namespace FanslationStudio.Plugins.UnityShared.Layout;
 ///     computed from them, so re-applying a rule is idempotent.
 ///   * Reverting restores only the properties a rule actually changed - games often move
 ///     elements themselves after we first saw them, and restoring stale values would fight that.
-///   * Rules are applied when elements appear (see <see cref="LayoutHooks"/>), on scene change,
+///   * Rules are applied when elements appear (see <see cref="UiHooks"/>), on scene change,
 ///     and on reload. <c>enforce: true</c> rules are also re-applied every tick.
 ///   * <c>active:</c> changes are deferred to the tick: SetActive during another object's
 ///     activation (i.e. from inside the OnEnable hook) can throw.
@@ -79,6 +79,17 @@ internal static class LayoutApplier
         _logger = logger;
         _repository.Load();
         _lastSceneHandle = SceneManager.GetActiveScene().handle;
+
+        UiHooks.GraphicEnabled += graphic =>
+        {
+            if (HasRules)
+                OnElementEnabled(graphic.transform);
+        };
+        UiHooks.GameObjectActivated += gameObject =>
+        {
+            if (HasRules)
+                OnElementEnabled(gameObject.transform);
+        };
         _logger.LogInfo($"[UIEditor] Loaded {_repository.Count} layout rule(s) from '{_repository.Folder}'.");
     }
 

@@ -69,6 +69,7 @@ internal sealed class TextTab : IEditorTab
         {
             rules.Add(new RuleSummary
             {
+                Key = resizer.Path,
                 Path = resizer.Path,
                 Description = resizer.SampleText,
                 File = TextResizerService.ResizerSourceFiles.TryGetValue(resizer.Path, out var file) ? Path.GetFileName(file) : "(unsaved)",

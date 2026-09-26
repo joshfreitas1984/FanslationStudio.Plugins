@@ -94,7 +94,7 @@ public class ContractRepositoryTests
             new() { Path = "Canvas/Last" },
         ]));
 
-        repo.Save(new LayoutContract { Path = "Canvas/*/Name" }, previousPath: "Canvas/Card1/Name");
+        repo.Save(new LayoutContract { Path = "Canvas/*/Name" }, previousKey: "Canvas/Card1/Name");
 
         Assert.Equal(["Canvas/First", "Canvas/*/Name", "Canvas/Last"], Read(folder, "a.yaml").Select(c => c.Path));
         Assert.Null(repo.Get("Canvas/Card1/Name"));

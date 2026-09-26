@@ -28,8 +28,6 @@ public class NoOpBehaviourAttacher : IBehaviourAttacher
     public TextMeshProUGUI[] FindAllTextElements() => [];
 
     public Text[] FindAllLegacyTextElements() => [];
-
-    public Vector3[] GetWorldCorners(RectTransform rectTransform) => new Vector3[4];
 }
 
 public class FakeTextMetadata : ITextMetadata
