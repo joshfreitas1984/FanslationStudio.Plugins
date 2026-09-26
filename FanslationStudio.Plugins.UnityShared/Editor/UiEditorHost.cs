@@ -1,28 +1,50 @@
 using System;
+using System.IO;
+using FanslationStudio.Plugins.Layout;
 using FanslationStudio.Plugins.Shared;
+using FanslationStudio.Plugins.Support;
+using FanslationStudio.Plugins.UnityShared.Layout;
 
 namespace FanslationStudio.Plugins.UnityShared.Editor;
 
 /// <summary>
-/// Host-agnostic entry point for the UI Editor. Each BepInEx host plugin binds config, calls
-/// <see cref="Initialize"/>, and calls <see cref="Tick"/> once per frame from whatever tick
+/// Host-agnostic entry point for the UI Editor. Each BepInEx host plugin calls
+/// <see cref="Initialize"/> once, then <see cref="Tick"/> once per frame from whatever tick
 /// mechanism is safe on that runtime.
 /// </summary>
 internal static class UiEditorHost
 {
     private static IPluginLogger _logger;
+    private static UiEditorHotkeys _hotkeys;
+    private static string _harmonyId;
+    private static bool _layoutsEnabled;
     private static string _lastError;
 
     public static bool Enabled { get; private set; }
 
-    public static void Initialize(IPluginLogger logger, BepInEx.Configuration.ConfigFile config)
+    public static void Initialize(IPluginLogger logger, BepInEx.Configuration.ConfigFile config, IYamlHelper yamlHelper,
+        string bepInExRootPath, string harmonyId)
     {
         _logger = logger;
-        Enabled = config.Bind("General", "Enabled", true, "Enable the UI Editor (element picker)").Value;
+        _harmonyId = harmonyId;
+
+        Enabled = config.Bind("General", "Enabled", true, "Enable the UI Editor").Value;
         if (!Enabled)
             return;
 
-        PickerController.Configure(logger, PickerHotkeys.Bind(config));
+        _layoutsEnabled = config.Bind("Layouts", "Enabled", true,
+            "Apply layout rules from BepInEx/layouts/*.yaml").Value;
+
+        _hotkeys = UiEditorHotkeys.Bind(config);
+        PickerController.Configure(logger, _hotkeys);
+
+        if (_layoutsEnabled)
+        {
+            var repository = new ContractRepository<LayoutContract>(
+                Path.Combine(bepInExRootPath, "layouts"), "zzAddedLayouts.yaml", yamlHelper, logger, c => c.Path);
+            LayoutApplier.Initialize(repository, logger);
+        }
+
         _logger.LogInfo("[UIEditor] Loaded.");
     }
 
@@ -34,6 +56,16 @@ internal static class UiEditorHost
 
         try
         {
+            if (_layoutsEnabled)
+            {
+                LayoutHooks.EnsurePatched(_harmonyId + ".Layout", _logger);
+
+                if (_hotkeys.Reload.IsDown())
+                    LayoutApplier.Reload();
+
+                LayoutApplier.Tick();
+            }
+
             PickerController.Tick();
             _lastError = null;
         }

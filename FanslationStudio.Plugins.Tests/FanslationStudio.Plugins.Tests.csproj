@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\FanslationStudio.Plugins.Shared\FanslationStudio.Plugins.Shared.csproj" />
     <ProjectReference Include="..\FanslationStudio.Plugins.SharpYaml\FanslationStudio.Plugins.SharpYaml.csproj" />
+    <ProjectReference Include="..\FanslationStudio.Plugins.YamlDotNet\FanslationStudio.Plugins.YamlDotNet.csproj" />
     <!-- Build-order only: ApiCompatibilityTests inspects the woven plugin DLLs these produce. -->
     <ProjectReference Include="..\FanslationStudio.Plugins.BepInEx5\FanslationStudio.Plugins.BepInEx5.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\FanslationStudio.Plugins.BepInEx6\FanslationStudio.Plugins.BepInEx6.csproj" ReferenceOutputAssembly="false" />

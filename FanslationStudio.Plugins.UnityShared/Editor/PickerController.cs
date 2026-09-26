@@ -3,45 +3,8 @@ using System.Collections.Generic;
 using BepInEx;
 using FanslationStudio.Plugins.Shared;
 using UnityEngine;
-#if IL2CPP
-using BepInEx.Unity.IL2CPP.Configuration;
-#elif BEPINEX6_MONO
-using BepInEx.Unity.Mono.Configuration;
-#else
-using BepInEx.Configuration;
-#endif
 
 namespace FanslationStudio.Plugins.UnityShared.Editor;
-
-internal sealed class PickerHotkeys
-{
-    public KeyboardShortcut Pick = new KeyboardShortcut(KeyCode.F8);
-    public KeyboardShortcut Clear = new KeyboardShortcut(KeyCode.F8, KeyCode.LeftShift);
-    public KeyboardShortcut Next = new KeyboardShortcut(KeyCode.PageDown);
-    public KeyboardShortcut Previous = new KeyboardShortcut(KeyCode.PageUp);
-    public KeyboardShortcut Parent = new KeyboardShortcut(KeyCode.LeftBracket);
-    public KeyboardShortcut Child = new KeyboardShortcut(KeyCode.RightBracket);
-
-    public static PickerHotkeys Bind(BepInEx.Configuration.ConfigFile config)
-    {
-        var defaults = new PickerHotkeys();
-        return new PickerHotkeys
-        {
-            Pick = config.Bind("Hotkeys", "Pick", defaults.Pick,
-                "Collects every UI element under the cursor and selects the topmost one").Value,
-            Clear = config.Bind("Hotkeys", "ClearSelection", defaults.Clear,
-                "Clears the current selection and hides the highlight").Value,
-            Next = config.Bind("Hotkeys", "NextElement", defaults.Next,
-                "Selects the next (lower) element under the cursor. Ctrl+Mouse wheel also works").Value,
-            Previous = config.Bind("Hotkeys", "PreviousElement", defaults.Previous,
-                "Selects the previous (higher) element under the cursor").Value,
-            Parent = config.Bind("Hotkeys", "SelectParent", defaults.Parent,
-                "Selects the parent of the current element").Value,
-            Child = config.Bind("Hotkeys", "SelectChild", defaults.Child,
-                "Selects a child of the current element (walks back down after SelectParent)").Value,
-        };
-    }
-}
 
 /// <summary>
 /// Owns the current pick: the stack of elements under the cursor, which one is selected, and
@@ -51,7 +14,7 @@ internal sealed class PickerHotkeys
 internal static class PickerController
 {
     private static IPluginLogger _logger;
-    private static PickerHotkeys _hotkeys = new PickerHotkeys();
+    private static UiEditorHotkeys _hotkeys = new UiEditorHotkeys();
 
     private static List<PickedElement> _stack = new List<PickedElement>();
     private static int _stackIndex = -1;
@@ -68,10 +31,10 @@ internal static class PickerController
     public static IReadOnlyList<PickedElement> Stack => _stack;
     public static int StackIndex => _stackIndex;
 
-    public static void Configure(IPluginLogger logger, PickerHotkeys hotkeys)
+    public static void Configure(IPluginLogger logger, UiEditorHotkeys hotkeys)
     {
         _logger = logger;
-        _hotkeys = hotkeys ?? new PickerHotkeys();
+        _hotkeys = hotkeys ?? new UiEditorHotkeys();
     }
 
     public static void Tick()

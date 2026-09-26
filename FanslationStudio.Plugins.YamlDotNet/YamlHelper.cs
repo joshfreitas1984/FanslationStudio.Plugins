@@ -1,7 +1,10 @@
 ﻿using FanslationStudio.Plugins.Support;
 using System;
 using System.Collections.Generic;
+using YamlDotNet.Core;
+using YamlDotNet.Core.Events;
 using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.EventEmitters;
 using YamlDotNet.Serialization.NamingConventions;
 using YamlDotNet.Serialization.TypeInspectors;
 
@@ -17,6 +20,7 @@ public class YamlHelper: IYamlHelper
         return new SerializerBuilder()
            .WithNamingConvention(CamelCaseNamingConvention.Instance)
            .WithTypeInspector(inner => new DefaultExcludingTypeInspector(inner))
+           .WithEventEmitter(next => new PrimitiveFlowSequenceEmitter(next))
            .Build();
     }
 
@@ -107,5 +111,35 @@ public class DefaultExcludingTypeInspector : TypeInspectorSkeleton
     private bool HasDefaultConstructor(Type type)
     {
         return type.GetConstructor(Type.EmptyTypes) != null;
+    }
+}
+
+/// <summary>
+/// Writes short arrays of primitives (layout vectors) inline, e.g. <c>pivot: [0.5, 0.5]</c>,
+/// matching the SharpYaml helper's LimitPrimitiveFlowSequence setting.
+/// </summary>
+public class PrimitiveFlowSequenceEmitter : ChainedEventEmitter
+{
+    private const int MaxInlineItems = 4;
+
+    public PrimitiveFlowSequenceEmitter(IEventEmitter nextEmitter) : base(nextEmitter)
+    {
+    }
+
+    public override void Emit(SequenceStartEventInfo eventInfo, IEmitter emitter)
+    {
+        if (eventInfo.Source.Value is Array array
+            && array.Length <= MaxInlineItems
+            && IsPrimitive(array.GetType().GetElementType()))
+        {
+            eventInfo.Style = SequenceStyle.Flow;
+        }
+
+        base.Emit(eventInfo, emitter);
+    }
+
+    private static bool IsPrimitive(Type type)
+    {
+        return type != null && (type.IsPrimitive || type == typeof(string) || type == typeof(decimal));
     }
 }

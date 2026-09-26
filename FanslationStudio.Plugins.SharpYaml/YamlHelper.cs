@@ -38,7 +38,9 @@ public class YamlHelper : IYamlHelper
             // bare `*oN` aliases that reference an anchor never defined in the current document,
             // silently corrupting the output (e.g. duplicate/blank-looking entries after saving
             // from the editor UI). EmitAlias=false avoids the whole hazard.
-            EmitAlias = false
+            EmitAlias = false,
+            // Write short primitive lists (layout vectors) inline: `pivot: [0.5, 0.5]`.
+            LimitPrimitiveFlowSequence = 4
         };
 
         return new Serializer(settings);
