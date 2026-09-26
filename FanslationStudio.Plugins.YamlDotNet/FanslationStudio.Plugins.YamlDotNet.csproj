@@ -7,7 +7,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="YamlDotNet" Version="16.0.0" />
+    <!-- Unity 2020-era Mono runtimes (e.g. LegendOfMortal, Unity 2020.3) don't fully implement
+         .NET Standard 2.1: YamlDotNet's netstandard2.1 build calls StringBuilder.Append(StringBuilder),
+         ReadOnlySpan etc. and fails with MissingMethodException on every load. Its netstandard2.0
+         build has no such dependencies, so compile against and ship that one explicitly. -->
+    <PackageReference Include="YamlDotNet" Version="16.0.0" ExcludeAssets="compile;runtime" GeneratePathProperty="true" />
+    <Reference Include="YamlDotNet">
+      <HintPath>$(PkgYamlDotNet)\lib\netstandard2.0\YamlDotNet.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

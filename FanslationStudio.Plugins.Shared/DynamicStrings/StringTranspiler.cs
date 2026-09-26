@@ -77,7 +77,7 @@ public class StringTranspiler
                 {
                     // Create a new instruction with the translated string but preserve all metadata
                     var newInstruction = new CodeInstruction(OpCodes.Ldstr, translatedStr);
-                    CopyLabelsAndBlocks(codes[i], newInstruction);
+                    MoveLabelsAndBlocks(codes[i], newInstruction);
                     codes[i] = newInstruction;
                     textReplaced.Add(operandStr);
                 }
@@ -100,7 +100,7 @@ public class StringTranspiler
                         if (ifCount == 2)
                         {
                             var newInstruction = new CodeInstruction(OpCodes.Ldloc_S, 7); // Load npcPrototype2 (index 7)
-                            StringTranspiler.CopyLabelsAndBlocks(codes[i], newInstruction);
+                            StringTranspiler.MoveLabelsAndBlocks(codes[i], newInstruction);
                             codes[i] = newInstruction;
                         }
 
@@ -108,7 +108,7 @@ public class StringTranspiler
                         if (ifCount == 3)
                         {
                             var newInstruction = new CodeInstruction(OpCodes.Ldloc_S, 8); // Load npcPrototype3 (index 8)
-                            StringTranspiler.CopyLabelsAndBlocks(codes[i], newInstruction);
+                            StringTranspiler.MoveLabelsAndBlocks(codes[i], newInstruction);
                             codes[i] = newInstruction;
                         }
                     }
@@ -124,21 +124,15 @@ public class StringTranspiler
         return codes;
     }
 
-    public static void CopyLabelsAndBlocks(CodeInstruction rawInstruction, CodeInstruction newInstruction)
+    // Every caller replaces rawInstruction with newInstruction, so moving is equivalent to copying.
+    // Uses HarmonyX's helpers rather than iterating CodeInstruction.labels ourselves: touching the
+    // List<Label> directly makes this assembly reference [netstandard]System.Reflection.Emit.Label,
+    // which Unity 2020-era netstandard facades don't forward (TypeLoadException on e.g.
+    // LegendOfMortal).
+    public static void MoveLabelsAndBlocks(CodeInstruction rawInstruction, CodeInstruction newInstruction)
     {
-        // Copy labels from original instruction
-        if (rawInstruction.labels != null && rawInstruction.labels.Count > 0)
-        {
-            foreach (var label in rawInstruction.labels)
-                newInstruction.labels.Add(label);
-        }
-
-        // Copy blocks from original instruction
-        if (rawInstruction.blocks != null && rawInstruction.blocks.Count > 0)
-        {
-            foreach (var block in rawInstruction.blocks)
-                newInstruction.blocks.Add(block);
-        }
+        newInstruction.MoveLabelsFrom(rawInstruction);
+        newInstruction.MoveBlocksFrom(rawInstruction);
     }
 
     public static HarmonyMethod CreateTranspilerMethod(DynamicStringContract[] contractsToApply)

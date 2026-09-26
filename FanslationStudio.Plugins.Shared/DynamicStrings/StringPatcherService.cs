@@ -298,7 +298,7 @@ public class StringPatcherService
 
             // Check generic type arguments
             var genericArgs = methodParamType.GetGenericArguments();
-            var originalGenericParts = originalParamType.Split('`');
+            var originalGenericParts = originalParamType.Split(new[] { '`' });
 
             if (originalGenericParts.Length > 1)
             {

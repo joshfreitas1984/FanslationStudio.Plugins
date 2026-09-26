@@ -710,7 +710,7 @@ public static class TextResizerEditorUi
 
         var needsPaging = options.Length > MaxVisibleDropdownOptions;
         var maxOffset = Math.Max(0, options.Length - MaxVisibleDropdownOptions);
-        _dropdownScrollOffset = Math.Clamp(_dropdownScrollOffset, 0, maxOffset);
+        _dropdownScrollOffset = Mathf.Clamp(_dropdownScrollOffset, 0, maxOffset);
 
         var visibleOptions = options.Skip(_dropdownScrollOffset).Take(MaxVisibleDropdownOptions).ToList();
         var rowCount = visibleOptions.Count + (needsPaging ? 2 : 0);

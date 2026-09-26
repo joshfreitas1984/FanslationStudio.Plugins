@@ -12,11 +12,33 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="Mono.Cecil" Version="0.11.4" />
+    <!-- Only used as the baseline for ApiCompatibilityTests: its netstandard2.0 reference
+         assemblies approximate what older Unity Mono runtimes (e.g. Unity 2020) implement. -->
+    <PackageReference Include="NETStandard.Library" Version="2.0.3" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\FanslationStudio.Plugins.Shared\FanslationStudio.Plugins.Shared.csproj" />
     <ProjectReference Include="..\FanslationStudio.Plugins.SharpYaml\FanslationStudio.Plugins.SharpYaml.csproj" />
+    <!-- Build-order only: ApiCompatibilityTests inspects the woven plugin DLLs these produce. -->
+    <ProjectReference Include="..\FanslationStudio.Plugins.BepInEx5\FanslationStudio.Plugins.BepInEx5.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\FanslationStudio.Plugins.BepInEx6\FanslationStudio.Plugins.BepInEx6.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(PkgNETStandard_Library)\build\netstandard2.0\ref\*.dll" LinkBase="Baselines\netstandard2.0" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>PluginOutput:BepInEx5</_Parameter1>
+      <_Parameter2>$(MSBuildThisFileDirectory)..\FanslationStudio.Plugins.BepInEx5\bin\$(Configuration)\netstandard2.1\FanslationStudio.Plugins.dll</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>PluginOutput:BepInEx6</_Parameter1>
+      <_Parameter2>$(MSBuildThisFileDirectory)..\FanslationStudio.Plugins.BepInEx6\bin\$(Configuration)\netstandard2.1\FanslationStudio.Plugins.dll</_Parameter2>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

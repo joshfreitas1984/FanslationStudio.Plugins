@@ -118,7 +118,7 @@ public class SpriteReplacerService
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Error Loading sprite contract '{file}': {ex}");
+                _logger.LogError($"Error Loading sprite contract '{file}': {ex.ToFullString()}");
             }
         }
 
@@ -265,7 +265,7 @@ public class SpriteReplacerService
     {
         if (Contracts.Any(c => c.Value.ReplacementSprite == spriteName))
         {
-            var segments = objectPath.Split('/');
+            var segments = objectPath.Split(new[] { '/' });
             var prefix = string.Empty;
             if (segments.Length < 3)
                 prefix = objectPath;

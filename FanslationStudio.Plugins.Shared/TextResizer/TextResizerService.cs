@@ -179,7 +179,7 @@ public class TextResizerService
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Error Loading resizer '{file}': {ex}");
+                _logger.LogError($"Error Loading resizer '{file}': {ex.ToFullString()}");
             }
         }
 
@@ -276,7 +276,9 @@ public class TextResizerService
             return;
 
         Resizers.Remove(path);
-        ResizerSourceFiles.Remove(path, out var sourceFile);
+        // Not Remove(key, out value): that overload is netstandard2.1-only (see ApiCompatibilityTests).
+        ResizerSourceFiles.TryGetValue(path, out var sourceFile);
+        ResizerSourceFiles.Remove(path);
         ResizersVersion++;
         CachedMatchedResizers.Clear();
         CompiledRegexCache.Clear();
