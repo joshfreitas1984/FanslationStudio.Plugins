@@ -65,7 +65,11 @@ public class TextResizerService
         _resizerFolder = Path.Combine(bepinexRootPath, "resizers");
         _yamlHelper = yamlHelper;
         _behaviourAttacher = behaviourAttacher;
+        Instance = this;
     }
+
+    /// <summary>The running service, for the UI Editor's Text tab. Null if TextResizer is disabled.</summary>
+    public static TextResizerService Instance { get; private set; }
 
     // Tracks whether Harmony patching has been applied yet. Patching is deferred (see
     // EnsurePatched) rather than done immediately in Awake/Load, because under IL2CPP,
@@ -216,6 +220,55 @@ public class TextResizerService
         Resizers[contract.Path] = contract;
         CachedMatchedResizers.Clear();
         ApplyAllResizers();
+    }
+
+    /// <summary>Drops a resizer that only exists as a preview (never saved). Saved ones are kept.</summary>
+    public void DiscardPreview(string path)
+    {
+        if (path == null || !Resizers.ContainsKey(path) || ResizerSourceFiles.ContainsKey(path))
+            return;
+
+        Resizers.Remove(path);
+        CachedMatchedResizers.Clear();
+        ResizersVersion++;
+    }
+
+    /// <summary>
+    /// Reverts every text element whose path matches one of the patterns, then re-applies
+    /// whatever resizer now matches it. ApplyResizing alone never undoes anything, so without
+    /// this a renamed, deleted or discarded (previewed) resizer leaves its values on screen.
+    /// </summary>
+    public void RefreshMatching(IList<string> patterns)
+    {
+        bool Matches(string path)
+        {
+            foreach (var pattern in patterns)
+            {
+                if (!string.IsNullOrEmpty(pattern) && PathPattern.IsMatch(pattern, path))
+                    return true;
+            }
+            return false;
+        }
+
+        CachedMatchedResizers.Clear();
+
+        foreach (var textElement in FindAllTextElements())
+        {
+            if (textElement != null && Matches(ObjectHelper.GetGameObjectPath(textElement.gameObject)))
+            {
+                RevertToOriginal(textElement);
+                ApplyResizing(textElement);
+            }
+        }
+
+        foreach (var textElement in FindAllLegacyTextElements())
+        {
+            if (textElement != null && Matches(ObjectHelper.GetGameObjectPath(textElement.gameObject)))
+            {
+                RevertLegacyToOriginal(textElement);
+                ApplyResizingToLegacyText(textElement);
+            }
+        }
     }
 
     /// <summary>

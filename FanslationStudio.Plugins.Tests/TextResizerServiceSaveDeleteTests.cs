@@ -144,4 +144,31 @@ public class TextResizerServiceSaveDeleteTests
             Assert.Equal(12345, TextResizerService.Resizers["Canvas/A"].IdealFontSize);
         }
     }
+
+    [Fact]
+    public void DiscardPreview_RemovesPreviewOnlyResizers_NeverSavedOnes()
+    {
+        lock (StaticStateLock)
+        {
+            var (service, _, fileA, _) = CreateService(nameof(DiscardPreview_RemovesPreviewOnlyResizers_NeverSavedOnes));
+
+            service.PreviewResizer(new TextResizerContract { Path = "Canvas/Draft", IdealFontSize = 10 });
+            service.DiscardPreview("Canvas/Draft");
+            service.DiscardPreview("Canvas/A");
+
+            Assert.False(TextResizerService.Resizers.ContainsKey("Canvas/Draft"));
+            Assert.True(TextResizerService.Resizers.ContainsKey("Canvas/A"));
+            Assert.Contains("Canvas/A", File.ReadAllText(fileA));
+        }
+    }
+
+    [Fact]
+    public void Instance_IsTheMostRecentlyCreatedService()
+    {
+        lock (StaticStateLock)
+        {
+            var (service, _, _, _) = CreateService(nameof(Instance_IsTheMostRecentlyCreatedService));
+            Assert.Same(service, TextResizerService.Instance);
+        }
+    }
 }

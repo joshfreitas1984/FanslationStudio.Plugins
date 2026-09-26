@@ -3,7 +3,6 @@ using System.IO;
 using FanslationStudio.Plugins.Layout;
 using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.Support;
-using FanslationStudio.Plugins.UnityShared.Editor.Tabs;
 using FanslationStudio.Plugins.UnityShared.Layout;
 
 namespace FanslationStudio.Plugins.UnityShared.Editor;
@@ -44,7 +43,7 @@ internal static class UiEditorHost
         var openOnPick = config.Bind("Editor", "OpenOnPick", true,
             "Open the editor window automatically when you pick an element").Value;
         EditorWindow.Configure(windowScale);
-        LayoutTab.AutoSave = config.Bind("Editor", "AutoSave", true,
+        EditorSettings.AutoSave = config.Bind("Editor", "AutoSave", true,
             "Save changed rules automatically when you move to another element, switch tab or close the window").Value;
         if (openOnPick)
             PickerController.Picked += EditorWindow.Open;

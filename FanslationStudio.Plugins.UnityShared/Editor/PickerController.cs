@@ -160,7 +160,7 @@ internal static class PickerController
             return;
 
         _descentTrail.Push(current);
-        SelectTransform(parent);
+        SelectElement(parent);
     }
 
     public static void SelectChild()
@@ -185,7 +185,7 @@ internal static class PickerController
         }
 
         if (child != null)
-            SelectTransform(child);
+            SelectElement(child);
     }
 
     public static void Clear()
@@ -196,7 +196,8 @@ internal static class PickerController
         SetSelected(null);
     }
 
-    private static void SelectTransform(RectTransform rectTransform)
+    /// <summary>Selects any element, e.g. one found from a rule. Keeps the stack index in sync if it is in the stack.</summary>
+    public static void SelectElement(RectTransform rectTransform)
     {
         // Keep the stack position in sync if we navigated onto an element that's in it.
         _stackIndex = _stack.FindIndex(e => e.RectTransform == rectTransform);

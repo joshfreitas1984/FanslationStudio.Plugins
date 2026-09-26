@@ -14,16 +14,16 @@ namespace FanslationStudio.Plugins.UnityShared.Editor;
 internal sealed class UiEditorHotkeys
 {
     // Unity numbers mouse buttons from 0: Mouse2 = middle, Mouse3 = back, Mouse4 = forward.
-    public KeyboardShortcut Pick = new KeyboardShortcut(KeyCode.Mouse4, KeyCode.LeftShift);
-    public KeyboardShortcut Clear = new KeyboardShortcut(KeyCode.Alpha1, KeyCode.LeftShift);
+    public KeyboardShortcut Pick = new KeyboardShortcut(KeyCode.Mouse4, KeyCode.LeftAlt);
+    public KeyboardShortcut Clear = new KeyboardShortcut(KeyCode.Alpha1, KeyCode.LeftAlt);
     public KeyboardShortcut Next = new KeyboardShortcut(KeyCode.PageDown);
     public KeyboardShortcut Previous = new KeyboardShortcut(KeyCode.PageUp);
     public KeyboardShortcut Parent = new KeyboardShortcut(KeyCode.LeftBracket);
     public KeyboardShortcut Child = new KeyboardShortcut(KeyCode.RightBracket);
-    public KeyboardShortcut Reload = new KeyboardShortcut(KeyCode.Mouse2, KeyCode.LeftShift);
-    public KeyboardShortcut ToggleWindow = new KeyboardShortcut(KeyCode.Mouse3, KeyCode.LeftShift);
+    public KeyboardShortcut Reload = new KeyboardShortcut(KeyCode.Mouse2, KeyCode.LeftAlt);
+    public KeyboardShortcut ToggleWindow = new KeyboardShortcut(KeyCode.Mouse3, KeyCode.LeftAlt);
     /// <summary>Hold this and scroll to cycle through the elements under the cursor. None disables.</summary>
-    public KeyCode WheelModifier = KeyCode.LeftShift;
+    public KeyCode WheelModifier = KeyCode.LeftAlt;
 
     /// <summary>Wheel cycling as shown to the user, e.g. "Shift + Wheel".</summary>
     public string WheelText => WheelModifier == KeyCode.None ? null : $"{Describe(WheelModifier)} + Wheel";
@@ -86,7 +86,7 @@ internal sealed class UiEditorHotkeys
                 "Shows or hides the editor window").Value,
             WheelModifier = config.Bind("Hotkeys", "WheelModifier", defaults.WheelModifier,
                 "Hold this key and scroll the mouse wheel to cycle through the elements under the cursor. " +
-                "Either side's key works (LeftShift also accepts RightShift). None disables wheel cycling").Value,
+                "Either side's key works (LeftAlt also accepts RightAlt). None disables wheel cycling").Value,
         };
     }
 }

@@ -25,9 +25,6 @@ internal sealed class LayoutTab : IEditorTab
     private const float PreviewInterval = 0.12f;
     private static readonly float[] NudgeSteps = { 1f, 5f, 10f, 50f };
 
-    /// <summary>Save changed rules automatically when leaving the element/tab/window.</summary>
-    public static bool AutoSave = true;
-
     private UiPanel _panel;
     private PickedElement _element;
     private LayoutContract _working;
@@ -51,23 +48,60 @@ internal sealed class LayoutTab : IEditorTab
 
     public bool IsAvailable(PickedElement element) => LayoutApplier.Repository != null;
 
-    public void Build(UiPanel panel, PickedElement element)
+    public string EditingRulePath => _savedPath;
+
+    public int RulesVersion => LayoutApplier.Repository?.Version ?? 0;
+
+    public IReadOnlyList<RuleSummary> ListRules()
+    {
+        var repository = LayoutApplier.Repository;
+        var rules = new List<RuleSummary>();
+        if (repository == null)
+            return rules;
+
+        foreach (var rule in repository.All)
+        {
+            rules.Add(new RuleSummary
+            {
+                Path = rule.Path,
+                Description = rule.Name,
+                File = Path.GetFileName(repository.GetSourceFile(rule.Path) ?? "(unsaved)"),
+            });
+        }
+        return rules;
+    }
+
+    public void Build(UiPanel panel, PickedElement element, string rulePath)
     {
         _panel = panel;
         _element = element;
-        _original = LayoutApplier.GetOriginal(element.RectTransform);
+        // Without an element on screen there are no originals; blank components mean 0.
+        _original = element != null ? LayoutApplier.GetOriginal(element.RectTransform) : default;
 
         var repository = LayoutApplier.Repository;
-        var existing = repository.Find(element.Path);
+        var existing = rulePath != null ? repository.Get(rulePath) : null;
+        if (existing == null && element != null)
+            existing = repository.Find(element.Path);
+
         if (existing != null)
         {
             _working = Clone(existing);
             _savedPath = repository.GetSourceFile(existing.Path) != null ? existing.Path : null;
         }
-        else
+        else if (element != null)
         {
             _working = new LayoutContract { Path = element.Path };
             _savedPath = null;
+        }
+        else
+        {
+            _working = null;
+            _savedPath = null;
+            _dirty = false;
+            _hasPreview = false;
+            panel.Clear();
+            panel.Label($"The rule '{rulePath}' no longer exists.", 0, 0, panel.Width, 40, 13, TextAnchor.UpperLeft, UiPanel.DimTextColor);
+            return;
         }
 
         // Edit position/size in one mode at a time: fold an offset into an absolute value.
@@ -92,19 +126,19 @@ internal sealed class LayoutTab : IEditorTab
 
     public void Tick()
     {
-        if (_dirty && Time.realtimeSinceStartup - _lastPreviewTime >= PreviewInterval)
+        if (_working != null && _dirty && Time.realtimeSinceStartup - _lastPreviewTime >= PreviewInterval)
             Preview();
     }
 
     public void Leave()
     {
-        if (!_dirty && !_hasPreview)
+        if (_working == null || (!_dirty && !_hasPreview))
             return;
 
         // Keep edits to an existing rule, or a new rule that sets something. A new rule with
         // nothing set is just a click-through, so don't litter the files with empty entries.
         var worthSaving = _savedPath != null || HasAnySetting(_working);
-        if (AutoSave && worthSaving && !string.IsNullOrEmpty(_working.Path))
+        if (EditorSettings.AutoSave && worthSaving && !string.IsNullOrEmpty(_working.Path))
         {
             var file = SaveCore();
             EditorWindow.SetStatus($"Auto-saved '{_working.Path}' to {Path.GetFileName(file)}.");
@@ -201,9 +235,15 @@ internal sealed class LayoutTab : IEditorTab
     {
         string info;
         var color = UiPanel.DimTextColor;
-        var isWildcard = _savedPath != null && _savedPath != _element.Path;
+        var isWildcard = _element != null && _savedPath != null && _savedPath != _element.Path;
 
-        if (_savedPath == null)
+        if (_element == null)
+        {
+            info = $"Not on screen - editing the rule from {Path.GetFileName(LayoutApplier.Repository.GetSourceFile(_savedPath) ?? "?")} " +
+                   "without a live element. Blank vector components count as 0.";
+            color = UiPanel.WarningColor;
+        }
+        else if (_savedPath == null)
             info = "New rule - Save writes it to zzAddedLayouts.yaml.";
         else if (isWildcard)
         {
@@ -213,7 +253,7 @@ internal sealed class LayoutTab : IEditorTab
         else
             info = $"Rule from {Path.GetFileName(LayoutApplier.Repository.GetSourceFile(_savedPath))}.";
 
-        var parent = _element.RectTransform.parent;
+        var parent = _element?.RectTransform.parent;
         var parentGroup = parent == null ? null : UiCompat.GetComponent<LayoutGroup>(parent);
         if (parentGroup != null && parentGroup.enabled)
         {
@@ -241,7 +281,9 @@ internal sealed class LayoutTab : IEditorTab
     private float RenderPositionRow(float y)
     {
         _panel.Label("Position", 0, y, LabelWidth - 58, RowHeight);
-        _panel.Button(_positionIsOffset ? "Offset" : "Absolute", LabelWidth - 56, y, 52, RowHeight, TogglePositionMode, UiPanel.MutedButtonColor);
+        // Converting between modes needs the element's original value, so only with an element.
+        _panel.Button(_positionIsOffset ? "Offset" : "Absolute", LabelWidth - 56, y, 52, RowHeight,
+            _element != null ? TogglePositionMode : (Action)null, UiPanel.MutedButtonColor);
 
         var value = _positionIsOffset ? _working.OffsetPosition : _working.AnchoredPosition;
         var fallback = _positionIsOffset ? new[] { 0f, 0f } : ToArray(_original.AnchoredPosition);
@@ -259,7 +301,8 @@ internal sealed class LayoutTab : IEditorTab
     private float RenderSizeRow(float y)
     {
         _panel.Label("Size", 0, y, LabelWidth - 58, RowHeight);
-        _panel.Button(_sizeIsOffset ? "Offset" : "Absolute", LabelWidth - 56, y, 52, RowHeight, ToggleSizeMode, UiPanel.MutedButtonColor);
+        _panel.Button(_sizeIsOffset ? "Offset" : "Absolute", LabelWidth - 56, y, 52, RowHeight,
+            _element != null ? ToggleSizeMode : (Action)null, UiPanel.MutedButtonColor);
 
         var value = _sizeIsOffset ? _working.OffsetSize : _working.SizeDelta;
         var fallback = _sizeIsOffset ? new[] { 0f, 0f } : ToArray(_original.SizeDelta);
@@ -459,7 +502,7 @@ internal sealed class LayoutTab : IEditorTab
         _dirty = false;
         _lastPreviewTime = Time.realtimeSinceStartup;
 
-        LayoutApplier.Refresh(patterns, _element.RectTransform);
+        LayoutApplier.Refresh(patterns, _element?.RectTransform);
         EditorWindow.SetStatus("Previewing - Save to keep these changes.");
     }
 
@@ -489,7 +532,7 @@ internal sealed class LayoutTab : IEditorTab
         _dirty = false;
         _hasPreview = false;
 
-        LayoutApplier.Refresh(patterns, _element.RectTransform);
+        LayoutApplier.Refresh(patterns, _element?.RectTransform);
         return file;
     }
 
@@ -497,7 +540,7 @@ internal sealed class LayoutTab : IEditorTab
     {
         LayoutApplier.Repository.Load();
         LayoutApplier.ReapplyAll();
-        Build(_panel, _element);
+        Build(_panel, _element, _element == null ? _savedPath : null);
         EditorWindow.SetStatus("Reloaded the rule from disk.");
     }
 
@@ -509,9 +552,9 @@ internal sealed class LayoutTab : IEditorTab
         repository.DiscardPreview(_previewPath);
         repository.DiscardPreview(_working.Path);
 
-        LayoutApplier.Refresh(patterns, _element.RectTransform);
+        LayoutApplier.Refresh(patterns, _element?.RectTransform);
         EditorWindow.SetStatus($"Deleted rule '{_savedPath}'.");
-        Build(_panel, _element);
+        Build(_panel, _element, _element == null ? _savedPath : null);
     }
 
     private static LayoutContract Clone(LayoutContract source)
