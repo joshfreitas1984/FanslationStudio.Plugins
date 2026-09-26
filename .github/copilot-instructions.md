@@ -281,9 +281,9 @@ delegated via an `I...Attacher`-style interface to) a host project compiled agai
   project - see `TextMetadataComponents.cs` for the template)
 
 Known instances still open (found by repo-wide grep, not yet fixed) as of this note:
-- **Open**: `BepInEx6.IL2CPP\Plugins\StringPatcherPlugin.cs` calls `AddComponent<StringPatcherUpdater>()`
-  from `Load()` with the `ClassInjector` registration commented out (unsafe patterns 1 and 2). If it
-  is needed on an IL2CPP game, switch it to the `Time.deltaTime` postfix tick like `TextResizerPlugin`.
+- ~~`BepInEx6.IL2CPP\Plugins\StringPatcherPlugin.cs` called `AddComponent<StringPatcherUpdater>()`
+  from `Load()` with no `ClassInjector` registration (unsafe patterns 1 and 2).~~ **Resolved**: it
+  now uses the `Time.deltaTime` postfix tick, once, to apply its patches on the first frame.
 - `SpriteReplacerService`/`SpriteReplacerPlugin`, the old `TextResizerEditorUi`, and the
   TextResizer hotkeys (add at cursor / add for scene) have been **removed**; their replacements
   live in `UnityShared` (Sprite and Text tabs of the UI Editor). The historical notes below are

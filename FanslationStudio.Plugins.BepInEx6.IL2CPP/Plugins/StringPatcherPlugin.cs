@@ -3,7 +3,6 @@ using BepInEx.Unity.IL2CPP;
 using FanslationStudio.Plugins.DynamicStrings;
 using FanslationStudio.Plugins.SharpYaml;
 using HarmonyLib;
-using Il2CppInterop.Runtime.Injection;
 using System;
 using UnityEngine;
 
@@ -40,29 +39,32 @@ public class StringPatcherPlugin : BasePlugin
 
         StringPatcherService.Awake();
 
-        // BasePlugin (unlike Mono's BaseUnityPlugin) is a plain C# class - Unity never calls
-        // Update() on it directly. Attach a registered MonoBehaviour component to receive
-        // Update() ticks and drive EnsurePatched().
-        // if (!ClassInjector.IsTypeRegisteredInIl2Cpp<StringPatcherUpdater>())
-        //     ClassInjector.RegisterTypeInIl2Cpp<StringPatcherUpdater>();
-        AddComponent<StringPatcherUpdater>();
+        // BasePlugin is not ticked by Unity, and attaching a custom MonoBehaviour needs
+        // ClassInjector registration, which crashes under IL2CPP (see copilot-instructions).
+        // Patching is deferred to the first frame instead, via a Time.deltaTime getter postfix -
+        // the same tick TextResizerPlugin and UiEditorPlugin use.
+        var harmony = new Harmony($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher.Tick");
+        var deltaTimeGetter = AccessTools.PropertyGetter(typeof(Time), nameof(Time.deltaTime));
+        harmony.Patch(deltaTimeGetter, postfix: new HarmonyMethod(typeof(StringPatcherPlugin), nameof(OnDeltaTimeRead)));
     }
 
-    internal static void RunUpdate()
+    private static bool _ticked;
+
+    private static void OnDeltaTimeRead()
     {
-        if (!_enabled)
+        // Only one tick is needed: EnsurePatched applies the patches once, on the first frame.
+        if (_ticked)
             return;
+        _ticked = true;
 
-        StringPatcherService.EnsurePatched();
+        try
+        {
+            if (_enabled)
+                StringPatcherService.EnsurePatched();
+        }
+        catch (Exception ex)
+        {
+            FanslationStudio.Plugins.DynamicStrings.StringPatcherService.Logger?.LogError($"[DynamicStringPatcher] Patching threw: {ex}");
+        }
     }
-}
-
-// Actual MonoBehaviour that receives Unity's Update() message under IL2CPP. StringPatcherPlugin
-// itself (BasePlugin) is not a Component and never gets ticked by Unity, so this component is
-// attached to the scene in Load() to drive the plugin's per-frame logic.
-public class StringPatcherUpdater : MonoBehaviour
-{
-    public StringPatcherUpdater(IntPtr ptr) : base(ptr) { }
-
-    private void Update() => StringPatcherPlugin.RunUpdate();
 }
