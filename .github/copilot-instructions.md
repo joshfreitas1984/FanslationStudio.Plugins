@@ -10,18 +10,56 @@
   When troubleshooting a crash, keep in mind which specific game/build the repro came from, and
   prefer defensive coding (try/catch around interop calls, fallbacks) over hard-coding around one
   game's quirks where practical.
-- `FanslationStudio.Plugins.Shared` (netstandard2.1): host-agnostic plugin services (e.g.
-
-  `TextResizerService`, `SpriteReplacerService`). Compiled against **Mono-style stub reference
+- `FanslationStudio.Plugins.Shared` (netstandard2.1): host-agnostic plugin services and plain
+  data (e.g. `TextResizerService`, `LayoutContract`, `SpriteContract`, `ContractRepository<T>`,
+  `PathPattern`). Compiled against **Mono-style stub reference
   assemblies** in `Reference\` (e.g. `Reference\UnityEngine.dll`), NOT the target game's real
   assemblies. This is compile-time only — these stubs can declare APIs/overloads that do not
   actually exist in a given game's real IL2CPP build. Don't trust the stub's API surface as proof
   a method exists at runtime.
+- `FanslationStudio.Plugins.UnityShared` (shared project, `.shproj`/`.projitems`): source files
+  **compiled into each host project**, so every Unity call in them binds to that host's real
+  assemblies. This is where Unity-touching code that all hosts need goes (the UI Editor, layout
+  and sprite appliers, `UiCompat`). Runtime differences use `#if IL2CPP` / `#if BEPINEX6_MONO`;
+  prefer adding a helper to `UiCompat` over scattering `#if`s. This is the preferred alternative
+  to the older "interface in Shared, implementation per host" pattern (`IBehaviourAttacher`).
 - `FanslationStudio.Plugins.BepInEx5` (Mono/BepInEx5 host): works reliably. Most interop issues
   below are IL2CPP-specific and have **not** been observed on this host.
 - `FanslationStudio.Plugins.BepInEx6.IL2CPP` (BepInEx 6 IL2CPP host, currently on
   `BepInEx.Unity.IL2CPP` `6.0.0-be.785`, a prerelease build): compiled against the game's own
   unhollowed assemblies in `unhollowed\`. This host is where all the issues below occur.
+- `FanslationStudio.Plugins.BepInEx6` (BepInEx 6 Mono host). Same code paths as BepInEx5.
+- Costura.Fody merges each host's output into a single `FanslationStudio.Plugins.dll`.
+- Build with `CI=true dotnet build FanslationStudio.Plugins.slnx`; without `CI=true` the post-build
+  step copies the DLL into local game folders.
+
+## UI Editor (UnityShared/Editor)
+
+One plugin (`UIEditor`) for text resizers, layouts and sprites. Rules live in separate folders
+keyed by hierarchy path: `BepInEx/resizers/`, `layouts/`, `sprites2/` (PNGs in `sprites2/dumped/`).
+
+- `UiEditorHost` is the entry point: each host calls `Initialize` then `Tick` once per frame
+  (Mono: `Canvas.willRenderCanvases`; IL2CPP: the `Time.deltaTime` postfix below).
+- `UiHooks` owns the shared Harmony postfixes (`Graphic.OnEnable`, `GameObject.SetActive`,
+  `Image.sprite` setter), patched lazily on the first tick and raised as C# events that
+  `LayoutApplier`/`SpriteApplier` subscribe to.
+- `ContractRepository<T>` (Shared) loads a folder of YAML files alphabetically (first key wins),
+  remembers which file owns each rule, and rewrites only that file on save/delete. Previews are
+  in-memory until saved.
+- The window is real uGUI built at runtime and is **polled** (`UiPanel`), never driven by
+  `UnityEvent` listeners (delegate conversion is unsafe under IL2CPP). Editor objects are named
+  with `ElementPicker.EditorObjectPrefix` so pickers and appliers skip them.
+- Each tab implements `IEditorTab`. Tabs auto-save dirty rules on `Leave`.
+- `PathPattern`: whole-path match, `*` spans `/`, a leading `/` means "any depth" (`/*` = all).
+
+## Unity 2020 Mono compatibility (older games)
+
+Some games ship a Unity 2020 Mono BCL that lacks netstandard2.1 APIs. They fail at runtime with
+`MissingMethodException`, even though they compile. Avoid: `string.Split(char)` (use
+`Split(new[] { c })`), `TrimStart(char)`, `Math.Clamp`, `Dictionary.Remove(key, out value)`,
+`StringBuilder.Append(StringBuilder)`. YamlDotNet is pinned to its **netstandard2.0** build for
+the same reason. `ApiCompatibilityTests` checks the woven plugin (and Costura-embedded
+assemblies) against the netstandard2.0 reference assemblies; run the tests after adding BCL calls.
 
 ## Working hypothesis: this may simply be an IL2CPP/Il2CppInterop instability, not a code bug
 
@@ -104,10 +142,9 @@ Do **not** reintroduce these without first re-verifying against a newer/older Il
    polling instead of subscribing.)
 7. **Passing a plain managed array (e.g. `Vector3[]`) as an "output"/fill-in parameter to an
    unhollowed IL2CPP method silently loses the results.** Confirmed culprit:
-   `RectTransform.GetWorldCorners(Vector3[])` in `Il2CppElementFinder.GetWorldCorners` - compiled
-   without error and never threw, but always returned four zeroed `Vector3`s, causing
-   `TextResizerService.FindTextElementsUnderCursor`/`FindLegacyTextElementsUnderCursor` and
-   `SpriteReplacerService.FindElementsAtCursor` to never match anything. Root cause: the real
+   `RectTransform.GetWorldCorners(Vector3[])` (now `UiCompat.GetWorldCorners`) - compiled
+   without error and never threw, but always returned four zeroed `Vector3`s, so cursor lookups
+   never matched anything. Root cause: the real
    unhollowed method signature takes `Il2CppInterop.Runtime.InteropTypes.Arrays.
    Il2CppStructArray<Vector3>`, not `Vector3[]`. `Il2CppStructArray<T>` defines an *implicit*
    `Vector3[] -> Il2CppStructArray<Vector3>` conversion (`Il2CppStructArray(T[] arr) : base(...)
@@ -131,7 +168,8 @@ Do **not** reintroduce these without first re-verifying against a newer/older Il
 `AddComponent<T>`/`ClassInjector` (unsafe, see above), use a Harmony postfix patch on a concrete,
 non-generic engine method/property that's called every frame by native code. Harmony patch
 application only needs ordinary `MethodInfo` resolution + an IL detour — it does not go through
-`GenericMethod_GetMethod_Hook`. Current implementation (`TextResizerPlugin.Load()`): patch
+`GenericMethod_GetMethod_Hook`. Current implementation (`TextResizerPlugin.Load()`, and the same
+pattern in `UiEditorPlugin`): patch
 `UnityEngine.Time.deltaTime`'s getter with a postfix, throttled to once per frame via
 `Time.frameCount` (since `deltaTime` may be read many times per frame by other game code).
 
@@ -187,7 +225,7 @@ Key points for building on this:
   catch [System.Reflection.ReflectionTypeLoadException] { $allTypes = $_.Exception.Types | Where-Object { $_ -ne $null } }
   ```
 - Don't assume a plugin pattern is "proven" just because another plugin in this repo
-  (`SpriteReplacerPlugin`, `StringPatcherPlugin`) uses it — those may not have actually been
+  (e.g. `StringPatcherPlugin`) uses it — those may not have actually been
   exercised through this crash path. Verify empirically before citing precedent.
 - A safe, zero-risk way to discover the real API surface without any of the above: use ordinary
   **`.NET reflection`** (`type.GetMethods()`, no Il2Cpp interop invocation at all) from code
@@ -243,10 +281,14 @@ delegated via an `I...Attacher`-style interface to) a host project compiled agai
   project - see `TextMetadataComponents.cs` for the template)
 
 Known instances still open (found by repo-wide grep, not yet fixed) as of this note:
-- ~~`TextResizerService.FindTextElementsUnderCursor()` / `FindLegacyTextElementsUnderCursor()`~~
-  **Resolved**: both now call `FindAllTextElements()`/`FindAllLegacyTextElements()` (which already
-  delegate to `_behaviourAttacher`) instead of calling `FindObjectsOfType<T>()` directly.
-- ~~`FanslationStudio.Plugins.Shared\Sprites\SpriteReplacerService.cs`~~ **Resolved**: added
+- **Open**: `BepInEx6.IL2CPP\Plugins\StringPatcherPlugin.cs` calls `AddComponent<StringPatcherUpdater>()`
+  from `Load()` with the `ClassInjector` registration commented out (unsafe patterns 1 and 2). If it
+  is needed on an IL2CPP game, switch it to the `Time.deltaTime` postfix tick like `TextResizerPlugin`.
+- `SpriteReplacerService`/`SpriteReplacerPlugin`, the old `TextResizerEditorUi`, and the
+  TextResizer hotkeys (add at cursor / add for scene) have been **removed**; their replacements
+  live in `UnityShared` (Sprite and Text tabs of the UI Editor). The historical notes below are
+  kept for the lessons, not because the code still exists.
+- ~~`FanslationStudio.Plugins.Shared\Sprites\SpriteReplacerService.cs`~~ (removed) **Resolved**: added
   `ISpriteElementFinder` (mirrors `IBehaviourAttacher`) with implementations in all three hosts
   (`MonoSpriteElementFinder` in `BepInEx5`/`BepInEx6`, `Il2CppSpriteElementFinder` in
   `BepInEx6.IL2CPP`). `FindAllElements()`/`FindElementsAtCursor()` now delegate to it instead of
@@ -261,8 +303,8 @@ Known instances still open (found by repo-wide grep, not yet fixed) as of this n
   `gameObject.GetComponentsInChildren(typeof(Component), true)`. **Dormant, not actively fixed**:
   its only consumer, `BepInEx5\Plugins\PrefabTextDumperPlugin.cs`, is entirely commented out (dead
   code) - no host project currently constructs this service, so there's no live crash path and no
-  way to test a fix in-game. Fix this the same way as `SpriteReplacerService` (per-host finder
-  interface) if/when this plugin is re-enabled.
+  way to test a fix in-game. If this plugin is re-enabled, move its Unity calls into
+  `UnityShared` (or a per-host finder interface).
 - ~~`TextResizerService.FindTextElementsUnderCursor()`/`FindLegacyTextElementsUnderCursor()` and
   `SpriteReplacerService.FindElementsAtCursor()` - `rectTransform.GetWorldCorners(Vector3[])`~~
   **Resolved**: same root cause as item 4 (instance method, non-generic, but still Shared-compiled
@@ -274,7 +316,11 @@ Known instances still open (found by repo-wide grep, not yet fixed) as of this n
   Type-based/generic" framing of item 4 was incomplete - plain instance methods on Unity types
   can hit the same failure when called from `Shared`-compiled IL. Treat *any* Unity API call in
   `Shared` as suspect, not just the generic/Type-based ones, and audit accordingly.
-- **Preemptive move, not yet crash-confirmed**: `SpriteReplacerService.AddElementsToContracts`
+- Sprite texture work now lives in `UnityShared/Sprites/SpriteImages.cs`. Dumping crops in the
+  `Graphics.Blit` (UV scale/offset into a sprite-sized RenderTexture) and reads the whole target
+  from (0,0): a sub-rect `ReadPixels` depends on the graphics API's y origin and produced wrapped
+  images on an IL2CPP game.
+- (Historical) **Preemptive move, not yet crash-confirmed**: `SpriteReplacerService.AddElementsToContracts`
   (texture-dump path) and `ReplaceSpriteInAsset` (sprite-replace path) called
   `Texture2D`/`RenderTexture`/`Graphics.Blit`/`Sprite.Create` APIs directly from `Shared`. Added
   `GetExportableTextureBytes(Texture2D)` and `CreateReplacementSprite(byte[], Rect, Vector2,
@@ -289,8 +335,7 @@ Known instances still open (found by repo-wide grep, not yet fixed) as of this n
   was dropped in the move since the finder classes don't have a logger reference.
 - `FanslationStudio.Plugins.Shared\TextResizer\TextChangedBehaviour.cs` -
   `GetComponent<TextMeshProUGUI>()` inside a `MonoBehaviour`-derived class living in `Shared`.
-  **Dormant, not actively fixed**: the only references to this class are inside fully
-  commented-out code in `TextResizerService.cs` (`AddTextElementsToResizers`) - it's never
+  **Dormant, not actively fixed**: nothing references this class - it's never
   actually attached via `AddComponent`/`GetComponent` anywhere reachable. Note for later: even if
   reactivated, an *instance* `GetComponent<T>()` call from within an already-attached
   `MonoBehaviour`'s own `Awake()` may not hit the same failure mode as the static/Type-based
