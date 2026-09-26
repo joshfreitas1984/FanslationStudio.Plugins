@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FanslationStudio.Plugins.Support;
 using UnityEngine;
 
 namespace FanslationStudio.Plugins.UnityShared.Editor;
@@ -10,12 +11,17 @@ namespace FanslationStudio.Plugins.UnityShared.Editor;
 /// Deliberately not an EventSystem/GraphicRaycaster raycast: those only report Graphics with
 /// raycastTarget enabled, which skips most labels and every non-Graphic container - exactly the
 /// things we want to edit. Instead every active RectTransform is tested geometrically.
-/// Elements faded out by a CanvasGroup (alpha 0) are skipped; reach them via parent/child.
+/// Elements faded out by a CanvasGroup (alpha 0) are still returned, flagged via
+/// <see cref="PickedElement.IsHidden"/>, so they can be picked without hunting through parent/child.
 /// </summary>
 internal static class ElementPicker
 {
     /// <summary>GameObjects whose name starts with this are editor UI and are never picked.</summary>
-    public const string EditorObjectPrefix = "FSEditor";
+    public const string EditorObjectPrefix = ObjectHelper.EditorObjectPrefix;
+
+    // Filters out degenerate (unlaid-out or genuinely zero-sized) rects without excluding small
+    // but real elements; the old 0.5f threshold was large enough to hide legitimate small labels.
+    private const float MinPickableSize = 0.01f;
 
     public static List<PickedElement> PickAt(Vector2 screenPoint)
     {
@@ -30,7 +36,7 @@ internal static class ElementPicker
 
             var info = GetAncestry(rectTransform, ancestry);
             var canvas = info.Canvas;
-            if (canvas == null || !canvas.enabled || info.Hidden)
+            if (canvas == null || !canvas.enabled)
                 continue;
 
             // The canvas root is always full-screen; it's never what you meant to pick.
@@ -42,21 +48,21 @@ internal static class ElementPicker
                 continue;
 
             var rect = rectTransform.rect;
-            if (rect.width <= 0.5f || rect.height <= 0.5f)
+            if (rect.width <= MinPickableSize || rect.height <= MinPickableSize)
                 continue;
 
             var camera = rootCanvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : rootCanvas.worldCamera;
             if (!RectTransformUtility.RectangleContainsScreenPoint(rectTransform, screenPoint, camera))
                 continue;
 
-            hits.Add(new Hit(rectTransform, canvas, rootCanvas));
+            hits.Add(new Hit(rectTransform, canvas, rootCanvas, info.Hidden));
         }
 
         hits.Sort((a, b) => CompareDrawOrder(b, a)); // topmost (drawn last) first
 
         var result = new List<PickedElement>(hits.Count);
         foreach (var hit in hits)
-            result.Add(PickedElement.From(hit.RectTransform));
+            result.Add(PickedElement.From(hit.RectTransform, hit.IsHidden));
         return result;
     }
 
@@ -148,13 +154,15 @@ internal static class ElementPicker
         public bool IsOverlay { get; }
         public int SortingLayerValue { get; }
         public List<int> SiblingPath { get; }
+        public bool IsHidden { get; }
 
-        public Hit(RectTransform rectTransform, Canvas canvas, Canvas rootCanvas)
+        public Hit(RectTransform rectTransform, Canvas canvas, Canvas rootCanvas, bool isHidden)
         {
             RectTransform = rectTransform;
             Canvas = canvas;
             IsOverlay = rootCanvas.renderMode == RenderMode.ScreenSpaceOverlay;
             SortingLayerValue = GetSortingLayerValue(canvas);
+            IsHidden = isHidden;
 
             SiblingPath = new List<int>();
             for (var current = rectTransform.transform; current != null; current = current.parent)

@@ -22,6 +22,13 @@ public class TextResizerService
     public static bool ResizersLoaded = false;
     public static Dictionary<string, TextResizerContract> Resizers = [];
 
+    // Explicit order: Dictionary enumeration order is not preserved once entries are removed, and
+    // wildcard matching (FindAppropriateResizer) needs a stable, predictable order - the same file
+    // order ContractRepository<T> uses for layout/sprite rules - rather than whatever order the
+    // dictionary happens to enumerate in, which otherwise picks an arbitrary match when more than
+    // one wildcard resizer matches the same path.
+    private static readonly List<string> ResizersOrder = [];
+
     // Incremented whenever a resizer is added, removed, or renamed (i.e. whenever the set of keys
     // in Resizers changes) - never on in-place edits (PreviewResizer/typing). The editor's Rules
     // list polls this to refresh after saves, deletes and reloads.
@@ -129,6 +136,7 @@ public class TextResizerService
         Resizers.Clear();
         ResizerSourceFiles.Clear();
         CachedMatchedResizers.Clear();
+        ResizersOrder.Clear();
 
         var resizerFiles = Directory.EnumerateFiles(_resizerFolder, "*.yaml").OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
         foreach (var file in resizerFiles)
@@ -159,18 +167,19 @@ public class TextResizerService
             {
                 Resizers.Add(newResizer.Path, newResizer);
                 ResizerSourceFiles[newResizer.Path] = sourceFile;
+                ResizersOrder.Add(newResizer.Path);
                 ResizersVersion++;
             }
         }
     }
 
     /// <summary>
-    /// Returns all currently-loaded resizers in the order they appear in <see cref="Resizers"/>
-    /// (insertion order), for display in the editor UI.
+    /// Returns all currently-loaded resizers in load order (see <see cref="ResizersOrder"/>), for
+    /// display in the editor UI.
     /// </summary>
     public static List<TextResizerContract> GetAllResizers()
     {
-        return Resizers.Values.ToList();
+        return ResizersOrder.Select(key => Resizers[key]).ToList();
     }
 
     /// <summary>
@@ -180,6 +189,8 @@ public class TextResizerService
     /// </summary>
     public void PreviewResizer(TextResizerContract contract)
     {
+        if (!Resizers.ContainsKey(contract.Path))
+            ResizersOrder.Add(contract.Path);
         Resizers[contract.Path] = contract;
         CachedMatchedResizers.Clear();
         ApplyAllResizers();
@@ -192,6 +203,7 @@ public class TextResizerService
             return;
 
         Resizers.Remove(path);
+        ResizersOrder.Remove(path);
         CachedMatchedResizers.Clear();
         ResizersVersion++;
     }
@@ -254,8 +266,11 @@ public class TextResizerService
         {
             Resizers.Remove(previousPath);
             ResizerSourceFiles.Remove(previousPath);
+            ResizersOrder.Remove(previousPath);
         }
 
+        if (!Resizers.ContainsKey(contract.Path))
+            ResizersOrder.Add(contract.Path);
         Resizers[contract.Path] = contract;
         ResizersVersion++;
         CachedMatchedResizers.Clear();
@@ -288,6 +303,7 @@ public class TextResizerService
         // Not Remove(key, out value): that overload is netstandard2.1-only (see ApiCompatibilityTests).
         ResizerSourceFiles.TryGetValue(path, out var sourceFile);
         ResizerSourceFiles.Remove(path);
+        ResizersOrder.Remove(path);
         ResizersVersion++;
         CachedMatchedResizers.Clear();
 
@@ -344,6 +360,10 @@ public class TextResizerService
         if (_isApplyingResizer)
             return;
 
+        var path = ObjectHelper.GetGameObjectPath(textComponent.gameObject);
+        if (path.StartsWith(ObjectHelper.EditorObjectPrefix))
+            return;
+
         try
         {
             _isApplyingResizer = true;
@@ -351,7 +371,6 @@ public class TextResizerService
             textComponent.wordWrappingRatios = 1.0f; //Disable Word wrapping ratios (should stop eastern rules)
             textComponent.enableKerning = false;
 
-            var path = ObjectHelper.GetGameObjectPath(textComponent.gameObject);
             var resizer = FindAppropriateResizer(path);
 
             if (resizer == null)
@@ -585,11 +604,14 @@ public class TextResizerService
         if (_isApplyingResizer)
             return;
 
+        var path = ObjectHelper.GetGameObjectPath(textComponent.gameObject);
+        if (path.StartsWith(ObjectHelper.EditorObjectPrefix))
+            return;
+
         try
         {
             _isApplyingResizer = true;
 
-            var path = ObjectHelper.GetGameObjectPath(textComponent.gameObject);
             var resizer = FindAppropriateResizer(path);
 
             if (resizer == null)
@@ -858,10 +880,13 @@ public class TextResizerService
         if (CachedMatchedResizers.TryGetValue(path, out var cachedResizer))
             return cachedResizer;
 
-        // Try wildcard matching for the remaining resizers
-        foreach (var resizerPair in Resizers)
+        // Try wildcard matching for the remaining resizers, in a stable load order rather than
+        // Resizers' own (unordered) dictionary enumeration - otherwise, when more than one
+        // wildcard resizer matches the same path, whichever the dictionary happens to enumerate
+        // first wins, which looks like a random pick to the user.
+        foreach (var key in ResizersOrder)
         {
-            var resizer = resizerPair.Value;
+            var resizer = Resizers[key];
 
             if (PathPattern.IsWildcard(resizer.Path) && PathPattern.IsMatch(resizer.Path, path))
             {

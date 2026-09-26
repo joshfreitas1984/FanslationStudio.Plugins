@@ -114,6 +114,23 @@ internal static class UiCompat
         return null;
     }
 
+    /// <summary>Every component on the given GameObject (not its children), by real runtime type -
+    /// including custom game MonoBehaviours, unlike the specific-type GetComponent&lt;T&gt; above.</summary>
+    public static Component[] GetComponents(GameObject gameObject)
+    {
+        if (gameObject == null)
+            return System.Array.Empty<Component>();
+#if IL2CPP
+        var components = gameObject.GetComponents(Il2CppType.From(typeof(Component)));
+        var result = new Component[components.Length];
+        for (var i = 0; i < components.Length; i++)
+            result[i] = components[i] as Component;
+        return result;
+#else
+        return gameObject.GetComponents(typeof(Component));
+#endif
+    }
+
     public static Vector3[] GetWorldCorners(RectTransform rectTransform)
     {
 #if IL2CPP

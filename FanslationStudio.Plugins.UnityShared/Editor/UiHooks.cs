@@ -1,6 +1,7 @@
 using System;
 using FanslationStudio.Plugins.Shared;
 using HarmonyLib;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -11,6 +12,8 @@ namespace FanslationStudio.Plugins.UnityShared.Editor;
 ///   * Graphic.OnEnable - every Image/Text/TMP as it's enabled or instantiated.
 ///   * GameObject.SetActive(true) - containers re-shown without any Graphic change.
 ///   * Image.sprite setter - the game swapping an Image's sprite.
+///   * Text.text / TMP_Text.text setter - the game rebinding a label's content, the usual signal
+///     that a recycled row (e.g. a list item) just got refreshed with new data.
 ///
 /// Patched lazily from the first tick, never from Load/Awake: under IL2CPP, patching too early
 /// can run UI static constructors re-entrantly and crash (see TextResizerService.EnsurePatched).
@@ -25,6 +28,7 @@ internal static class UiHooks
     public static event Action<Graphic> GraphicEnabled;
     public static event Action<GameObject> GameObjectActivated;
     public static event Action<Image> ImageSpriteSet;
+    public static event Action<Component> TextSet;
 
     public static void EnsurePatched(string harmonyId, IPluginLogger logger)
     {
@@ -38,6 +42,8 @@ internal static class UiHooks
         Patch(harmony, AccessTools.Method(typeof(GameObject), nameof(GameObject.SetActive), new[] { typeof(bool) }),
             nameof(SetActivePostfix), "GameObject.SetActive");
         Patch(harmony, AccessTools.PropertySetter(typeof(Image), nameof(Image.sprite)), nameof(ImageSpriteSetterPostfix), "Image.sprite");
+        Patch(harmony, AccessTools.PropertySetter(typeof(Text), nameof(Text.text)), nameof(TextSetterPostfix), "Text.text");
+        Patch(harmony, AccessTools.PropertySetter(typeof(TMP_Text), nameof(TMP_Text.text)), nameof(TmpTextSetterPostfix), "TMP_Text.text");
     }
 
     private static void Patch(Harmony harmony, System.Reflection.MethodInfo target, string postfix, string label)
@@ -72,6 +78,16 @@ internal static class UiHooks
     private static void ImageSpriteSetterPostfix(Image __instance)
     {
         Raise(ImageSpriteSet, __instance);
+    }
+
+    private static void TextSetterPostfix(Text __instance)
+    {
+        Raise(TextSet, __instance);
+    }
+
+    private static void TmpTextSetterPostfix(TMP_Text __instance)
+    {
+        Raise(TextSet, __instance);
     }
 
     private static void Raise<T>(Action<T> handlers, T argument)

@@ -33,6 +33,9 @@ internal sealed class LayoutTab : IEditorTab
     // Path of the saved rule being edited (null for a new rule), and the path currently previewed.
     private string _savedPath;
     private string _previewPath;
+    // A wildcard rule this element falls back to when it has no rule of its own - shown as a note
+    // in RenderRuleInfo, never loaded into _working (see Build()).
+    private LayoutContract _matchingWildcard;
     private bool _dirty;
     private bool _hasPreview;
     private float _lastPreviewTime;
@@ -79,10 +82,15 @@ internal sealed class LayoutTab : IEditorTab
         // Without an element on screen there are no originals; blank components mean 0.
         _original = element != null ? LayoutApplier.GetOriginal(element.RectTransform) : default;
 
+        // Exact match only - a wildcard rule that merely happens to affect this element is never
+        // loaded as the editable working copy, or Save would edit/rename the shared wildcard
+        // instead of creating a rule for this one element.
         var repository = LayoutApplier.Repository;
         var existing = rulePath != null ? repository.Get(rulePath) : null;
         if (existing == null && element != null)
-            existing = repository.Find(element.Path);
+            existing = repository.Get(element.Path);
+
+        _matchingWildcard = existing == null && element != null ? repository.Find(element.Path) : null;
 
         if (existing != null)
         {
@@ -163,7 +171,12 @@ internal sealed class LayoutTab : IEditorTab
             || c.LocalPosition != null || c.LocalScale != null || c.RotationZ != null
             || c.CopyRectFrom != null || c.CopySizeFromSource != null || c.PlaceBefore != null
             || c.ImageEnabled != null || c.PreserveAspect != null
-            || c.ContentSizeFitterEnabled != null || c.LayoutGroupEnabled != null;
+            || c.ContentSizeFitterEnabled != null || c.LayoutGroupEnabled != null
+            || c.CounterRotateChildren != null || c.CounterRotateSwapSize != null
+            || c.ContentSizeFitterHorizontal != null || c.ContentSizeFitterVertical != null
+            || c.LayoutGroupChildControlWidth != null || c.LayoutGroupChildControlHeight != null
+            || c.LayoutGroupChildForceExpandWidth != null || c.LayoutGroupChildForceExpandHeight != null
+            || c.LayoutGroupSpacing != null;
     }
 
     private void Render()
@@ -220,7 +233,14 @@ internal sealed class LayoutTab : IEditorTab
         BoolToggle("Enforce", toggleWidth + Gap, y, toggleWidth, _working.IsEnforced(), v => _working.Enforce = v ? true : (bool?)null);
         BoolToggle("Rule enabled", 2 * (toggleWidth + Gap), y, toggleWidth, _working.IsEnabled(), v => _working.Enabled = v ? (bool?)null : false);
         TriToggle("Copy size", 3 * (toggleWidth + Gap), y, toggleWidth, () => _working.CopySizeFromSource, v => _working.CopySizeFromSource = v);
+        y += RowStep;
+        BoolToggle("Counter-rotate children", 0, y, toggleWidth * 2 + Gap, _working.CounterRotateChildren == true,
+            v => _working.CounterRotateChildren = v ? true : (bool?)null);
+        BoolToggle("Swap child size", 2 * (toggleWidth + Gap), y, toggleWidth * 2 + Gap, _working.CounterRotateSwapSize == true,
+            v => _working.CounterRotateSwapSize = v ? true : (bool?)null);
         y += RowStep + 4f;
+
+        y = RenderFitterAndGroupRows(y, width);
 
         y = StringRow("Copy rect from", y, width, () => _working.CopyRectFrom, v => _working.CopyRectFrom = v, "e.g. ../HeroName");
         y = StringRow("Place before", y, width, () => _working.PlaceBefore, v => _working.PlaceBefore = v, "sibling, e.g. ../HeroName");
@@ -245,7 +265,15 @@ internal sealed class LayoutTab : IEditorTab
             color = UiPanel.WarningColor;
         }
         else if (_savedPath == null)
+        {
             info = "New rule - Save writes it to zzAddedLayouts.yaml.";
+            if (_matchingWildcard != null)
+            {
+                info += $" Currently falls back to wildcard rule '{_matchingWildcard.Path}' - " +
+                        "saving here overrides it for just this element.";
+                color = UiPanel.WarningColor;
+            }
+        }
         else if (isWildcard)
         {
             info = $"Editing wildcard rule from {Path.GetFileName(LayoutApplier.Repository.GetSourceFile(_savedPath))} - changes affect every element it matches.";
@@ -454,6 +482,60 @@ internal sealed class LayoutTab : IEditorTab
             MarkDirty();
         }, placeholder);
         return y + RowStep;
+    }
+
+    private static readonly string[] FitModeOptions = { "", "Unconstrained", "MinSize", "PreferredSize" };
+
+    /// <summary>
+    /// Editable ContentSizeFitter/Horizontal-or-VerticalLayoutGroup fields, shown directly on the
+    /// main Layout form rather than tucked away in the Inspect tab - editing these usually happens
+    /// right alongside anchors/size/rotation while chasing a sizing bug, so they belong next to
+    /// them. Always shown (like Size fitter/Layout group above) even if the element doesn't
+    /// currently have that component; the field is simply a no-op until it does.
+    /// </summary>
+    private float RenderFitterAndGroupRows(float y, float width)
+    {
+        _panel.Label("ContentSizeFitter / LayoutGroup (Horizontal/Vertical)", 0, y, width, 16, 11, TextAnchor.MiddleLeft, UiPanel.DimTextColor);
+        y += 18f;
+
+        var half = (width - Gap) / 2f;
+        FitModeField("horizontalFit", 0, y, half, () => _working.ContentSizeFitterHorizontal, v => _working.ContentSizeFitterHorizontal = v);
+        FitModeField("verticalFit", half + Gap, y, half, () => _working.ContentSizeFitterVertical, v => _working.ContentSizeFitterVertical = v);
+        y += RowStep;
+
+        var toggleWidth = (width - 3 * Gap) / 4f;
+        TriToggle("childControlWidth", 0, y, toggleWidth, () => _working.LayoutGroupChildControlWidth, v => _working.LayoutGroupChildControlWidth = v);
+        TriToggle("childControlHeight", toggleWidth + Gap, y, toggleWidth, () => _working.LayoutGroupChildControlHeight, v => _working.LayoutGroupChildControlHeight = v);
+        TriToggle("forceExpandWidth", 2 * (toggleWidth + Gap), y, toggleWidth, () => _working.LayoutGroupChildForceExpandWidth, v => _working.LayoutGroupChildForceExpandWidth = v);
+        TriToggle("forceExpandHeight", 3 * (toggleWidth + Gap), y, toggleWidth, () => _working.LayoutGroupChildForceExpandHeight, v => _working.LayoutGroupChildForceExpandHeight = v);
+        y += RowStep;
+
+        _panel.Label("spacing", 0, y, LabelWidth, RowHeight);
+        _panel.Input(Format(_working.LayoutGroupSpacing), LabelWidth, y, FieldWidth, RowHeight, text =>
+        {
+            if (TryParseOptional(text, out var value))
+            {
+                _working.LayoutGroupSpacing = value;
+                MarkDirty();
+            }
+        });
+        y += RowStep;
+
+        return y;
+    }
+
+    private void FitModeField(string label, float x, float y, float width, Func<string> get, Action<string> set)
+    {
+        var value = get();
+        var labelWidth = 66f;
+        _panel.Label(label, x, y, labelWidth, RowHeight, 11, TextAnchor.MiddleLeft, UiPanel.DimTextColor);
+        _panel.Button(string.IsNullOrEmpty(value) ? "(default)" : value, x + labelWidth, y, width - labelWidth, RowHeight, () =>
+            EditorWindow.ShowChoice(label, FitModeOptions, value ?? string.Empty, picked =>
+            {
+                set(string.IsNullOrEmpty(picked) ? null : picked);
+                MarkDirty();
+                Render();
+            }), string.IsNullOrEmpty(value) ? UiPanel.MutedButtonColor : UiPanel.ButtonColor);
     }
 
     private void TriToggle(string label, float x, float y, float width, Func<bool?> get, Action<bool?> set)

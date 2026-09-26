@@ -18,8 +18,9 @@ namespace FanslationStudio.Plugins.UnityShared.Layout;
 ///     computed from them, so re-applying a rule is idempotent.
 ///   * Reverting restores only the properties a rule actually changed - games often move
 ///     elements themselves after we first saw them, and restoring stale values would fight that.
-///   * Rules are applied when elements appear (see <see cref="UiHooks"/>), on scene change,
-///     and on reload. <c>enforce: true</c> rules are also re-applied every tick.
+///   * Rules are applied when elements appear or have their sprite swapped (see
+///     <see cref="UiHooks"/>), on scene change, and on reload. <c>enforce: true</c> rules are
+///     also re-applied every tick.
 ///   * <c>active:</c> changes are deferred to the tick: SetActive during another object's
 ///     activation (i.e. from inside the OnEnable hook) can throw.
 /// </summary>
@@ -43,6 +44,13 @@ internal static class LayoutApplier
         PreserveAspect = 1 << 11,
         ContentSizeFitter = 1 << 12,
         LayoutGroup = 1 << 13,
+        ContentSizeFitterHorizontal = 1 << 14,
+        ContentSizeFitterVertical = 1 << 15,
+        LayoutGroupChildControlWidth = 1 << 16,
+        LayoutGroupChildControlHeight = 1 << 17,
+        LayoutGroupChildForceExpandWidth = 1 << 18,
+        LayoutGroupChildForceExpandHeight = 1 << 19,
+        LayoutGroupSpacing = 1 << 20,
     }
 
     private sealed class ElementState
@@ -57,6 +65,14 @@ internal static class LayoutApplier
         public int SiblingIndex;
         public bool ActiveSelf;
         public bool? ImageEnabled, PreserveAspect, ContentSizeFitterEnabled, LayoutGroupEnabled;
+        public ContentSizeFitter.FitMode? ContentSizeFitterHorizontal, ContentSizeFitterVertical;
+        public bool? LayoutGroupChildControlWidth, LayoutGroupChildControlHeight;
+        public bool? LayoutGroupChildForceExpandWidth, LayoutGroupChildForceExpandHeight;
+        public float? LayoutGroupSpacing;
+
+        /// <summary>Children this rule's counterRotateChildren last force-rotated, by instance ID -
+        /// released (rotation restored) whenever that set changes or the rule stops applying.</summary>
+        public HashSet<int> CounterRotatedChildIds;
     }
 
     private static ContractRepository<LayoutContract> _repository;
@@ -89,6 +105,16 @@ internal static class LayoutApplier
         {
             if (HasRules)
                 OnElementEnabled(gameObject.transform);
+        };
+        UiHooks.ImageSpriteSet += image =>
+        {
+            if (HasRules)
+                OnElementRefreshed(image.transform);
+        };
+        UiHooks.TextSet += component =>
+        {
+            if (HasRules)
+                OnElementRefreshed(component.transform);
         };
         _logger.LogInfo($"[UIEditor] Loaded {_repository.Count} layout rule(s) from '{_repository.Folder}'.");
     }
@@ -182,6 +208,43 @@ internal static class LayoutApplier
             var rect = UiCompat.As<RectTransform>(level);
             if (rect != null && _appliedThisTick.Add(rect.GetInstanceID()))
                 Apply(rect, contract, levelPath);
+        }
+    }
+
+    /// <summary>
+    /// Called when an element's content is rebound (its sprite or text setter fires) rather than
+    /// its active state changing. A recycled row (e.g. a list item) is often refreshed exactly
+    /// this way - one child's Image/Text is rebound with no OnEnable or SetActive anywhere in the
+    /// row - so a sibling with no signal of its own (a static background behind the label, say)
+    /// would otherwise never see its rule reapplied. Checks the ancestor chain as
+    /// <see cref="OnElementEnabled"/> does, then its immediate siblings too.
+    /// </summary>
+    public static void OnElementRefreshed(Transform transform)
+    {
+        if (_applying || !HasRules || transform == null)
+            return;
+
+        OnElementEnabled(transform);
+
+        var parent = transform.parent;
+        if (parent == null || transform.root.name.StartsWith(ElementPicker.EditorObjectPrefix))
+            return;
+
+        var parentPath = ObjectHelper.GetGameObjectPath(parent.gameObject);
+        for (var i = 0; i < parent.childCount; i++)
+        {
+            var child = parent.GetChild(i);
+            if (child == transform)
+                continue;
+
+            var sibling = UiCompat.As<RectTransform>(child);
+            if (sibling == null)
+                continue;
+
+            var path = parentPath + "/" + sibling.name;
+            var contract = _repository.Find(path);
+            if (contract != null)
+                Apply(sibling, contract, path);
         }
     }
 
@@ -293,6 +356,7 @@ internal static class LayoutApplier
             ApplyRectTransform(state, contract);
             ApplyComponents(state, contract);
             ApplyPlaceBefore(state, contract);
+            ApplyCounterRotation(state, contract);
 
             if (contract.Active.HasValue)
             {
@@ -444,6 +508,69 @@ internal static class LayoutApplier
                 state.Touched |= Touched.LayoutGroup;
             }
         }
+
+        if (contract.ContentSizeFitterHorizontal != null || contract.ContentSizeFitterVertical != null)
+        {
+            var fitter = UiCompat.GetComponent<ContentSizeFitter>(state.Rect);
+            if (fitter != null)
+            {
+                if (TryParseFitMode(contract.ContentSizeFitterHorizontal, out var horizontalMode))
+                {
+                    fitter.horizontalFit = horizontalMode;
+                    state.Touched |= Touched.ContentSizeFitterHorizontal;
+                }
+                if (TryParseFitMode(contract.ContentSizeFitterVertical, out var verticalMode))
+                {
+                    fitter.verticalFit = verticalMode;
+                    state.Touched |= Touched.ContentSizeFitterVertical;
+                }
+            }
+        }
+
+        if (contract.LayoutGroupChildControlWidth.HasValue || contract.LayoutGroupChildControlHeight.HasValue
+            || contract.LayoutGroupChildForceExpandWidth.HasValue || contract.LayoutGroupChildForceExpandHeight.HasValue
+            || contract.LayoutGroupSpacing.HasValue)
+        {
+            var group = UiCompat.GetComponent<HorizontalOrVerticalLayoutGroup>(state.Rect);
+            if (group != null)
+            {
+                if (contract.LayoutGroupChildControlWidth.HasValue)
+                {
+                    group.childControlWidth = contract.LayoutGroupChildControlWidth.Value;
+                    state.Touched |= Touched.LayoutGroupChildControlWidth;
+                }
+                if (contract.LayoutGroupChildControlHeight.HasValue)
+                {
+                    group.childControlHeight = contract.LayoutGroupChildControlHeight.Value;
+                    state.Touched |= Touched.LayoutGroupChildControlHeight;
+                }
+                if (contract.LayoutGroupChildForceExpandWidth.HasValue)
+                {
+                    group.childForceExpandWidth = contract.LayoutGroupChildForceExpandWidth.Value;
+                    state.Touched |= Touched.LayoutGroupChildForceExpandWidth;
+                }
+                if (contract.LayoutGroupChildForceExpandHeight.HasValue)
+                {
+                    group.childForceExpandHeight = contract.LayoutGroupChildForceExpandHeight.Value;
+                    state.Touched |= Touched.LayoutGroupChildForceExpandHeight;
+                }
+                if (contract.LayoutGroupSpacing.HasValue)
+                {
+                    group.spacing = contract.LayoutGroupSpacing.Value;
+                    state.Touched |= Touched.LayoutGroupSpacing;
+                }
+            }
+        }
+    }
+
+    private static bool TryParseFitMode(string value, out ContentSizeFitter.FitMode mode)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            mode = default;
+            return false;
+        }
+        return Enum.TryParse(value, true, out mode);
     }
 
     private static void ApplyPlaceBefore(ElementState state, LayoutContract contract)
@@ -469,6 +596,105 @@ internal static class LayoutApplier
         state.Touched |= Touched.SiblingIndex;
     }
 
+    private static void ApplyCounterRotation(ElementState state, LayoutContract contract)
+    {
+        // Always release last time's set first: recomputing from scratch (rather than diffing
+        // against it) means a child dropped from consideration - the rule turned the feature off,
+        // its rotationZ was removed, or the child gained its own explicit rule - reliably gets its
+        // rotation restored instead of being left force-rotated forever.
+        ReleaseCounterRotatedChildren(state);
+
+        if (contract.CounterRotateChildren != true || !contract.RotationZ.HasValue)
+            return;
+
+        var counterAngle = NormalizeAngle(-contract.RotationZ.Value);
+        var swapSize = contract.CounterRotateSwapSize == true && IsPerpendicular(contract.RotationZ.Value);
+        var rect = state.Rect;
+        HashSet<int> applied = null;
+        for (var i = 0; i < rect.childCount; i++)
+        {
+            var child = UiCompat.As<RectTransform>(rect.GetChild(i));
+            if (child == null)
+                continue;
+
+            var childPath = state.Path + "/" + child.name;
+            var childContract = _repository.Find(childPath);
+            if (childContract != null && childContract.RotationZ.HasValue)
+                continue; // an explicit rule on the child wins
+
+            var childState = GetOrCapture(child, childPath);
+            child.localEulerAngles = new Vector3(childState.LocalEuler.x, childState.LocalEuler.y, counterAngle);
+            childState.Touched |= Touched.Rotation;
+
+            if (swapSize)
+            {
+                child.sizeDelta = new Vector2(childState.SizeDelta.y, childState.SizeDelta.x);
+                childState.Touched |= Touched.SizeDelta;
+
+                var fitter = UiCompat.GetComponent<ContentSizeFitter>(child);
+                if (fitter != null && childState.ContentSizeFitterEnabled == true)
+                {
+                    fitter.enabled = false;
+                    childState.Touched |= Touched.ContentSizeFitter;
+                }
+            }
+
+            (applied ??= new HashSet<int>()).Add(child.GetInstanceID());
+        }
+
+        state.CounterRotatedChildIds = applied;
+    }
+
+    /// <summary>Restores rotation (and, if swapped, size/fitter state) on every child a rule's
+    /// counterRotateChildren force-touched.</summary>
+    private static void ReleaseCounterRotatedChildren(ElementState state)
+    {
+        if (state.CounterRotatedChildIds == null)
+            return;
+
+        foreach (var id in state.CounterRotatedChildIds)
+        {
+            if (!_states.TryGetValue(id, out var childState) || childState.Rect == null)
+                continue;
+
+            if ((childState.Touched & Touched.Rotation) != 0)
+            {
+                childState.Touched &= ~Touched.Rotation;
+                childState.Rect.localEulerAngles = childState.LocalEuler;
+            }
+
+            if ((childState.Touched & Touched.SizeDelta) != 0)
+            {
+                childState.Touched &= ~Touched.SizeDelta;
+                childState.Rect.sizeDelta = childState.SizeDelta;
+            }
+
+            if ((childState.Touched & Touched.ContentSizeFitter) != 0 && childState.ContentSizeFitterEnabled.HasValue)
+            {
+                childState.Touched &= ~Touched.ContentSizeFitter;
+                var fitter = UiCompat.GetComponent<ContentSizeFitter>(childState.Rect);
+                if (fitter != null)
+                    fitter.enabled = childState.ContentSizeFitterEnabled.Value;
+            }
+        }
+
+        state.CounterRotatedChildIds = null;
+    }
+
+    private static float NormalizeAngle(float angle)
+    {
+        angle %= 360f;
+        return angle < 0 ? angle + 360f : angle;
+    }
+
+    /// <summary>True if the angle is an odd multiple of 90 degrees (i.e. local axes end up
+    /// swapped relative to the screen), where swapping a child's sizeDelta actually makes sense.</summary>
+    private static bool IsPerpendicular(float angle)
+    {
+        var halfTurn = NormalizeAngle(angle) % 180f;
+        return Mathf.Abs(halfTurn - 90f) < 0.01f;
+    }
+
     public static void Revert(RectTransform rect)
     {
         if (rect != null && _states.TryGetValue(rect.GetInstanceID(), out var state))
@@ -481,6 +707,8 @@ internal static class LayoutApplier
         var touched = state.Touched;
         state.Applied = null;
         state.Touched = Touched.None;
+
+        ReleaseCounterRotatedChildren(state);
 
         if (rect == null || touched == Touched.None)
             return;
@@ -521,6 +749,38 @@ internal static class LayoutApplier
                     group.enabled = state.LayoutGroupEnabled.Value;
             }
 
+            if ((touched & (Touched.ContentSizeFitterHorizontal | Touched.ContentSizeFitterVertical)) != 0)
+            {
+                var fitter = UiCompat.GetComponent<ContentSizeFitter>(rect);
+                if (fitter != null)
+                {
+                    if ((touched & Touched.ContentSizeFitterHorizontal) != 0 && state.ContentSizeFitterHorizontal.HasValue)
+                        fitter.horizontalFit = state.ContentSizeFitterHorizontal.Value;
+                    if ((touched & Touched.ContentSizeFitterVertical) != 0 && state.ContentSizeFitterVertical.HasValue)
+                        fitter.verticalFit = state.ContentSizeFitterVertical.Value;
+                }
+            }
+
+            const Touched horizontalOrVerticalGroupFlags = Touched.LayoutGroupChildControlWidth | Touched.LayoutGroupChildControlHeight
+                | Touched.LayoutGroupChildForceExpandWidth | Touched.LayoutGroupChildForceExpandHeight | Touched.LayoutGroupSpacing;
+            if ((touched & horizontalOrVerticalGroupFlags) != 0)
+            {
+                var group = UiCompat.GetComponent<HorizontalOrVerticalLayoutGroup>(rect);
+                if (group != null)
+                {
+                    if ((touched & Touched.LayoutGroupChildControlWidth) != 0 && state.LayoutGroupChildControlWidth.HasValue)
+                        group.childControlWidth = state.LayoutGroupChildControlWidth.Value;
+                    if ((touched & Touched.LayoutGroupChildControlHeight) != 0 && state.LayoutGroupChildControlHeight.HasValue)
+                        group.childControlHeight = state.LayoutGroupChildControlHeight.Value;
+                    if ((touched & Touched.LayoutGroupChildForceExpandWidth) != 0 && state.LayoutGroupChildForceExpandWidth.HasValue)
+                        group.childForceExpandWidth = state.LayoutGroupChildForceExpandWidth.Value;
+                    if ((touched & Touched.LayoutGroupChildForceExpandHeight) != 0 && state.LayoutGroupChildForceExpandHeight.HasValue)
+                        group.childForceExpandHeight = state.LayoutGroupChildForceExpandHeight.Value;
+                    if ((touched & Touched.LayoutGroupSpacing) != 0 && state.LayoutGroupSpacing.HasValue)
+                        group.spacing = state.LayoutGroupSpacing.Value;
+                }
+            }
+
             if ((touched & Touched.Active) != 0)
                 QueueSetActive(rect.gameObject, state.ActiveSelf);
         }
@@ -543,6 +803,7 @@ internal static class LayoutApplier
         var image = UiCompat.GetComponent<Image>(rect);
         var fitter = UiCompat.GetComponent<ContentSizeFitter>(rect);
         var group = UiCompat.GetComponent<LayoutGroup>(rect);
+        var horizontalOrVerticalGroup = UiCompat.GetComponent<HorizontalOrVerticalLayoutGroup>(rect);
 
         state = new ElementState
         {
@@ -562,6 +823,13 @@ internal static class LayoutApplier
             PreserveAspect = image != null ? image.preserveAspect : (bool?)null,
             ContentSizeFitterEnabled = fitter != null ? fitter.enabled : (bool?)null,
             LayoutGroupEnabled = group != null ? group.enabled : (bool?)null,
+            ContentSizeFitterHorizontal = fitter != null ? fitter.horizontalFit : (ContentSizeFitter.FitMode?)null,
+            ContentSizeFitterVertical = fitter != null ? fitter.verticalFit : (ContentSizeFitter.FitMode?)null,
+            LayoutGroupChildControlWidth = horizontalOrVerticalGroup != null ? horizontalOrVerticalGroup.childControlWidth : (bool?)null,
+            LayoutGroupChildControlHeight = horizontalOrVerticalGroup != null ? horizontalOrVerticalGroup.childControlHeight : (bool?)null,
+            LayoutGroupChildForceExpandWidth = horizontalOrVerticalGroup != null ? horizontalOrVerticalGroup.childForceExpandWidth : (bool?)null,
+            LayoutGroupChildForceExpandHeight = horizontalOrVerticalGroup != null ? horizontalOrVerticalGroup.childForceExpandHeight : (bool?)null,
+            LayoutGroupSpacing = horizontalOrVerticalGroup != null ? horizontalOrVerticalGroup.spacing : (float?)null,
         };
 
         _states[id] = state;

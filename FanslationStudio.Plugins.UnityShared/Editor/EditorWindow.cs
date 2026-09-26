@@ -26,12 +26,12 @@ internal static class EditorWindow
     }
 
     private const float WindowWidth = 840f;
-    private const float WindowHeight = 650f;
+    private const float WindowHeight = 760f;
     private const float Padding = 12f;
     private const float TitleHeight = 30f;
     private const float ListWidth = 240f;
     private const float ListTopHeight = 58f;
-    private const float HeaderHeight = 72f;
+    private const float HeaderHeight = 90f;
     private const float StatusHeight = 22f;
     private const string PrefKeyX = "FSUIEditor.WindowX";
     private const string PrefKeyY = "FSUIEditor.WindowY";
@@ -41,6 +41,7 @@ internal static class EditorWindow
         new LayoutTab(),
         new TextTab(),
         new SpriteTab(),
+        new InspectTab(),
     };
 
     private static float _scale = 1f;
@@ -113,6 +114,25 @@ internal static class EditorWindow
         LeaveTab();
         _root.SetActive(false);
         _dragging = false;
+    }
+
+    /// <summary>Selects an arbitrary element (e.g. one found by drilling into the Inspect tab's
+    /// child browser) and switches to the Layout tab so its rule can be created/edited right away,
+    /// rather than requiring the element to already be the top-level picked one.</summary>
+    public static void SelectForEditing(RectTransform rectTransform)
+    {
+        if (rectTransform == null)
+            return;
+
+        // LeaveTab() first, same as SwitchTab(): RebuildElement()'s "re-picking the same spot
+        // keeps the tab as-is" shortcut keys only off the element, not the tab index, so without
+        // this it would rebuild the header but leave the OLD tab's content on screen.
+        LeaveTab();
+        PickerController.SelectElement(rectTransform);
+        var layoutTabIndex = _tabs.FindIndex(t => t is LayoutTab);
+        _tabIndex = layoutTabIndex >= 0 ? layoutTabIndex : 0;
+        _rulePage = 0;
+        _selectionDirty = true;
     }
 
     public static void SetStatus(string text, bool warning = false)
@@ -469,6 +489,9 @@ internal static class EditorWindow
         var tags = string.Empty;
         if ((element.Capabilities & ElementCapabilities.Text) != 0) tags += "T";
         if ((element.Capabilities & ElementCapabilities.Sprite) != 0) tags += "S";
+        if ((element.Capabilities & ElementCapabilities.SizeFitter) != 0) tags += "F";
+        if ((element.Capabilities & ElementCapabilities.LayoutGroup) != 0) tags += "G";
+        if (element.IsHidden) tags += "H";
         return tags.Length > 0 ? $"[{tags}]" : string.Empty;
     }
 
@@ -519,6 +542,7 @@ internal static class EditorWindow
         {
             _header.Label($"{element.Name}  {element.CapabilityTags}", 0, 0, width, 20, 14, TextAnchor.MiddleLeft, null, FontStyle.Bold);
             _header.Label(element.Path, 0, 20, width, 18, 11, TextAnchor.MiddleLeft, UiPanel.DimTextColor);
+            _header.Label($"Components: {element.ComponentList}", 0, 38, width, 16, 10, TextAnchor.MiddleLeft, UiPanel.DimTextColor);
         }
         else if (detached)
         {
@@ -537,7 +561,7 @@ internal static class EditorWindow
             // A rule opened on its own belongs to one tab; the others don't apply to it.
             var available = detached ? i == _tabIndex : tab.IsAvailable(element);
             var color = i == _tabIndex ? UiPanel.SelectedColor : available ? UiPanel.MutedButtonColor : new Color(0.18f, 0.18f, 0.2f, 1f);
-            _header.Button(tab.Title, x, 44, 100, 26, available ? () => SwitchTab(index) : (Action)null, color);
+            _header.Button(tab.Title, x, 62, 100, 26, available ? () => SwitchTab(index) : (Action)null, color);
             x += 104f;
         }
     }

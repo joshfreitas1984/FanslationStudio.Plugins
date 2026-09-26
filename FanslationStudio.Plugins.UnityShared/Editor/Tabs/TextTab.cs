@@ -32,6 +32,9 @@ internal sealed class TextTab : IEditorTab
     private TextResizerContract _working;
     private string _savedPath;
     private string _previewPath;
+    // A wildcard resizer this element falls back to when it has no rule of its own - shown as a
+    // note in RenderInfo, never loaded into _working (see Build()).
+    private TextResizerContract _matchingWildcard;
     private bool _dirty;
     private bool _hasPreview;
     private float _lastPreviewTime;
@@ -87,11 +90,19 @@ internal sealed class TextTab : IEditorTab
         _showLegacy = element == null || !isTmp;
         _current = element != null ? ReadCurrentValues(isTmp) : default;
 
+        // Exact match only - a wildcard resizer that merely happens to affect this element is
+        // never loaded as the editable working copy, or Save would edit/rename the shared
+        // wildcard instead of creating a rule for this one element. The matching wildcard (if
+        // any) is kept separately in _matchingWildcard so RenderInfo can still mention it.
         TextResizerContract existing = null;
         if (rulePath != null)
             TextResizerService.Resizers.TryGetValue(rulePath, out existing);
         if (existing == null && element != null)
-            existing = TextResizerService.FindAppropriateResizer(element.Path);
+            TextResizerService.Resizers.TryGetValue(element.Path, out existing);
+
+        _matchingWildcard = existing == null && element != null
+            ? TextResizerService.FindAppropriateResizer(element.Path)
+            : null;
 
         if (existing != null)
         {
@@ -231,7 +242,15 @@ internal sealed class TextTab : IEditorTab
             color = UiPanel.WarningColor;
         }
         else if (_savedPath == null)
+        {
             info = "New resizer - Save writes it to zzAddedResizers.yaml.";
+            if (_matchingWildcard != null)
+            {
+                info += $" Currently falls back to wildcard resizer '{_matchingWildcard.Path}' - " +
+                        "saving here overrides it for just this element.";
+                color = UiPanel.WarningColor;
+            }
+        }
         else if (isWildcard)
         {
             info = $"Editing wildcard resizer from {SourceFileName(_savedPath)} - changes affect every element it matches.";

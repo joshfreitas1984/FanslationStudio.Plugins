@@ -13,6 +13,8 @@ internal enum ElementCapabilities
     TmpText = 1,
     LegacyText = 2,
     Sprite = 4,
+    SizeFitter = 8,
+    LayoutGroup = 16,
     Text = TmpText | LegacyText,
 }
 
@@ -24,15 +26,24 @@ internal sealed class PickedElement
     public ElementCapabilities Capabilities { get; private set; }
     public string TextPreview { get; private set; }
 
+    /// <summary>Real runtime type name of every component on this GameObject, comma-separated -
+    /// the quickest way to spot a custom game script (not a stock Unity component) driving an
+    /// element's layout, sizing or behaviour.</summary>
+    public string ComponentList { get; private set; }
+
+    /// <summary>True if a CanvasGroup fades this element out (alpha ~0); still pickable, just not visible.</summary>
+    public bool IsHidden { get; private set; }
+
     public bool IsAlive => RectTransform != null;
     public string Name => RectTransform != null ? RectTransform.name : "(destroyed)";
 
-    public static PickedElement From(RectTransform rectTransform)
+    public static PickedElement From(RectTransform rectTransform, bool isHidden = false)
     {
         var element = new PickedElement
         {
             RectTransform = rectTransform,
             Path = ObjectHelper.GetGameObjectPath(rectTransform.gameObject),
+            IsHidden = isHidden,
         };
 
         element.DetectTmp();
@@ -48,7 +59,37 @@ internal sealed class PickedElement
         if (image != null && image.sprite != null)
             element.Capabilities |= ElementCapabilities.Sprite;
 
+        if (UiCompat.GetComponent<ContentSizeFitter>(rectTransform) != null)
+            element.Capabilities |= ElementCapabilities.SizeFitter;
+        if (UiCompat.GetComponent<LayoutGroup>(rectTransform) != null)
+            element.Capabilities |= ElementCapabilities.LayoutGroup;
+
+        element.ComponentList = BuildComponentList(rectTransform);
+
         return element;
+    }
+
+    private static string BuildComponentList(RectTransform rectTransform)
+    {
+        var components = UiCompat.GetComponents(rectTransform.gameObject);
+        var names = new string[components.Length];
+        for (var i = 0; i < components.Length; i++)
+            names[i] = ComponentTypeName(components[i]);
+        return string.Join(", ", names);
+    }
+
+    // Under IL2CPP, every unhollowed component is exposed through the same wrapper type
+    // (Component), so C#'s GetType().Name always says "Component" - the real class only shows up
+    // via GetIl2CppType(), which reflects the underlying native class instead.
+    internal static string ComponentTypeName(Component component)
+    {
+        if (component == null)
+            return "(null)";
+#if IL2CPP
+        return component.GetIl2CppType().Name;
+#else
+        return component.GetType().Name;
+#endif
     }
 
     // TMP is looked up in its own method so a game without Unity.TextMeshPro fails only this call
@@ -86,6 +127,12 @@ internal sealed class PickedElement
                 tags += "[Text]";
             if ((Capabilities & ElementCapabilities.Sprite) != 0)
                 tags += "[Sprite]";
+            if ((Capabilities & ElementCapabilities.SizeFitter) != 0)
+                tags += "[Fitter]";
+            if ((Capabilities & ElementCapabilities.LayoutGroup) != 0)
+                tags += "[LayoutGrp]";
+            if (IsHidden)
+                tags += "[Hidden]";
             return tags + "[Layout]";
         }
     }

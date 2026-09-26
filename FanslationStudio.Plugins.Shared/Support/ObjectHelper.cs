@@ -4,6 +4,15 @@ using UnityEngine;
 namespace FanslationStudio.Plugins.Support;
 public static class ObjectHelper
 {
+    /// <summary>
+    /// GameObjects whose name starts with this are the UI Editor's own overlay, never the game's
+    /// UI - appliers and resizers must skip them. Defined here (rather than alongside
+    /// ElementPicker, which owns the concept) because Shared is a separate assembly that appliers
+    /// living in Shared, like TextResizerService, can't otherwise see; ElementPicker.EditorObjectPrefix
+    /// is kept in sync with this value.
+    /// </summary>
+    public const string EditorObjectPrefix = "FSEditor";
+
     public static string GetObjectPath(this object obj)
     {
         if (obj is not GameObject && obj is not Component)
