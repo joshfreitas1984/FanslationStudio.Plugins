@@ -44,7 +44,7 @@ jobs:
         run: dotnet pack FanslationStudio.Plugins.BepInEx6/FanslationStudio.Plugins.BepInEx6.csproj --configuration Release --no-build -p:Version=${{ steps.version.outputs.VERSION }} --output ./nuget
 
       - name: Pack NuGet - BepInEx6 IL2CPP
-        run: dotnet pack FanslationStudio.Plugins.BepInEx6/FanslationStudio.Plugins.BepInEx6.IL2CPP --configuration Release --no-build -p:Version=${{ steps.version.outputs.VERSION }} --output ./nuget
+        run: dotnet pack FanslationStudio.Plugins.BepInEx6/FanslationStudio.Plugins.BepInEx6.IL2CPP.csproj --configuration Release --no-build -p:Version=${{ steps.version.outputs.VERSION }} --output ./nuget
 
       - name: Push NuGet packages
         shell: pwsh
