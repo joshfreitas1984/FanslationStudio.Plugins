@@ -14,14 +14,14 @@ namespace FanslationStudio.Plugins.UnityShared.Editor;
 internal sealed class UiEditorHotkeys
 {
     // Unity numbers mouse buttons from 0: Mouse2 = middle, Mouse3 = back, Mouse4 = forward.
-    public KeyboardShortcut Pick = new KeyboardShortcut(KeyCode.Mouse4, KeyCode.LeftAlt);
-    public KeyboardShortcut Clear = new KeyboardShortcut(KeyCode.Alpha1, KeyCode.LeftAlt);
+    public KeyboardShortcut Pick = new KeyboardShortcut(KeyCode.Mouse2, KeyCode.LeftAlt);
+    public KeyboardShortcut Clear = new KeyboardShortcut(KeyCode.Mouse3, KeyCode.LeftAlt);
     public KeyboardShortcut Next = new KeyboardShortcut(KeyCode.PageDown);
     public KeyboardShortcut Previous = new KeyboardShortcut(KeyCode.PageUp);
     public KeyboardShortcut Parent = new KeyboardShortcut(KeyCode.LeftBracket);
     public KeyboardShortcut Child = new KeyboardShortcut(KeyCode.RightBracket);
-    public KeyboardShortcut Reload = new KeyboardShortcut(KeyCode.Mouse2, KeyCode.LeftAlt);
-    public KeyboardShortcut ToggleWindow = new KeyboardShortcut(KeyCode.Mouse3, KeyCode.LeftAlt);
+    public KeyboardShortcut Reload = new KeyboardShortcut(KeyCode.Mouse4, KeyCode.LeftAlt);
+    public KeyboardShortcut ToggleWindow = new KeyboardShortcut(KeyCode.Alpha1, KeyCode.LeftAlt);
     /// <summary>Hold this and scroll to cycle through the elements under the cursor. None disables.</summary>
     public KeyCode WheelModifier = KeyCode.LeftAlt;
 

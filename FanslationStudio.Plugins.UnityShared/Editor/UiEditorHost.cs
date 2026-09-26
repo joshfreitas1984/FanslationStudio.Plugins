@@ -64,7 +64,7 @@ internal static class UiEditorHost
         if (_spritesEnabled)
         {
             var repository = new ContractRepository<SpriteContract>(
-                Path.Combine(bepInExRootPath, "sprites2"), "zzAdded.yaml", yamlHelper, logger, c => c.Path, SpriteContract.KeyOf);
+                Path.Combine(bepInExRootPath, "sprites2"), "zzAddedSprites.yaml", yamlHelper, logger, c => c.Path, SpriteContract.KeyOf);
             SpriteApplier.Initialize(repository, logger);
         }
 
