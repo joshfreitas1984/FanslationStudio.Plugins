@@ -72,6 +72,48 @@ internal static class UiCompat
 #endif
     }
 
+    public static T[] FindObjectsOfType<T>() where T : Object
+    {
+        // Generic FindObjectsOfType<T> is fine here: this file is compiled against each host's
+        // real Unity assemblies (see Il2CppElementFinder.FindAllTextElements).
+        return Object.FindObjectsOfType<T>();
+    }
+
+    public static T GetComponentInParent<T>(Component component) where T : Component
+    {
+        for (var current = component == null ? null : component.transform; current != null; current = current.parent)
+        {
+            var found = GetComponent<T>(current.gameObject);
+            if (found != null)
+                return found;
+        }
+
+        return null;
+    }
+
+    public static Font GetBuiltinFont()
+    {
+        // Unity 2022.2+ renamed the built-in font; older versions throw for the new name.
+        foreach (var name in new[] { "Arial.ttf", "LegacyRuntime.ttf" })
+        {
+            try
+            {
+#if IL2CPP
+                var font = As<Font>(Resources.GetBuiltinResource(Il2CppType.From(typeof(Font)), name));
+#else
+                var font = Resources.GetBuiltinResource<Font>(name);
+#endif
+                if (font != null)
+                    return font;
+            }
+            catch (System.ArgumentException)
+            {
+            }
+        }
+
+        return null;
+    }
+
     public static Vector3[] GetWorldCorners(RectTransform rectTransform)
     {
 #if IL2CPP

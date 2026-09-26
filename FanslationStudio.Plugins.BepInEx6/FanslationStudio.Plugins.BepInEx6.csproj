@@ -17,6 +17,7 @@
       https://nuget.samboy.dev/v3/index.json
     </RestoreAdditionalProjectSources>
     <RootNamespace>FanslationStudio.Plugins</RootNamespace>
+    <DefineConstants>$(DefineConstants);BEPINEX6_MONO</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
