@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -104,7 +103,7 @@ public class SpriteReplacerService
         Contracts.Clear();
         CachedMatchesContracts.Clear();
 
-        var contractFiles = Directory.EnumerateFiles(_folder, "*.yaml");
+        var contractFiles = Directory.EnumerateFiles(_folder, "*.yaml").OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
         foreach (var file in contractFiles)
         {
             try
@@ -300,18 +299,8 @@ public class SpriteReplacerService
         {
             var contract = contractPair.Value;
 
-            if (contract.Path.Contains("*"))
-            {
-                // Convert to Regex
-                var pattern = contract.Path
-                    .Replace("/", @"\/")
-                    .Replace("(", @"\(")
-                    .Replace(")", @"\)")
-                    .Replace("*", ".*");
-
-                if (Regex.IsMatch(path, pattern))
-                    return contract;
-            }
+            if (PathPattern.IsWildcard(contract.Path) && PathPattern.IsMatch(contract.Path, path))
+                return contract;
         }
 
         return null;

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Source files in this folder are compiled directly into each host project (BepInEx5, BepInEx6,
+  BepInEx6.IL2CPP) rather than into a shared assembly. That means they are built against each
+  host's own Unity references (Mono stubs or IL2CPP unhollowed assemblies), so they CAN call Unity
+  APIs directly - unlike FanslationStudio.Plugins.Shared, where Unity calls throw
+  MissingMethodException under IL2CPP.
+
+  Use `#if IL2CPP` (defined by the IL2CPP host) for interop differences, ideally hidden behind
+  UiCompat.
+-->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <MSBuildAllProjects Condition="'$(MSBuildVersion)' == '' Or '$(MSBuildVersion)' &lt; '16.0'">$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <HasSharedItems>true</HasSharedItems>
+    <SharedGUID>8C0D8073-3087-4F33-967D-2CE0BEE9DCB6</SharedGUID>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration">
+    <Import_RootNamespace>FanslationStudio.Plugins.UnityShared</Import_RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)**\*.cs" />
+  </ItemGroup>
+</Project>

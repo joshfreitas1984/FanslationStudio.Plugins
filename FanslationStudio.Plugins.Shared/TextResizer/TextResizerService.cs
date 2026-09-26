@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -43,9 +42,6 @@ public class TextResizerService
 
     // Cache for storing previously matched results
     public static Dictionary<string, TextResizerContract> CachedMatchedResizers = [];
-
-    // Cache compiled regex patterns for wildcard matching
-    private static Dictionary<string, Regex> CompiledRegexCache = [];
 
     // Flag to prevent recursion in text setter patches
     private static bool _isApplyingResizer = false;
@@ -163,9 +159,8 @@ public class TextResizerService
         Resizers.Clear();
         ResizerSourceFiles.Clear();
         CachedMatchedResizers.Clear();
-        CompiledRegexCache.Clear();
 
-        var resizerFiles = Directory.EnumerateFiles(_resizerFolder, "*.yaml");
+        var resizerFiles = Directory.EnumerateFiles(_resizerFolder, "*.yaml").OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
         foreach (var file in resizerFiles)
         {
             try
@@ -220,7 +215,6 @@ public class TextResizerService
     {
         Resizers[contract.Path] = contract;
         CachedMatchedResizers.Clear();
-        CompiledRegexCache.Clear();
         ApplyAllResizers();
     }
 
@@ -249,7 +243,6 @@ public class TextResizerService
         Resizers[contract.Path] = contract;
         ResizersVersion++;
         CachedMatchedResizers.Clear();
-        CompiledRegexCache.Clear();
 
         if (!ResizerSourceFiles.TryGetValue(contract.Path, out var file))
         {
@@ -281,7 +274,6 @@ public class TextResizerService
         ResizerSourceFiles.Remove(path);
         ResizersVersion++;
         CachedMatchedResizers.Clear();
-        CompiledRegexCache.Clear();
 
         if (sourceFile != null)
             RewriteFile(sourceFile);
@@ -1047,27 +1039,10 @@ public class TextResizerService
         {
             var resizer = resizerPair.Value;
 
-            if (resizer.Path.Contains("*"))
+            if (PathPattern.IsWildcard(resizer.Path) && PathPattern.IsMatch(resizer.Path, path))
             {
-                if (!CompiledRegexCache.TryGetValue(resizer.Path, out var regex))
-                {
-                    var pattern = resizer.Path
-                        .Replace("/", @"\/")
-                        .Replace("(", @"\(")
-                        .Replace(")", @"\)")
-                        .Replace("[", @"\[")
-                        .Replace("]", @"\]")
-                        .Replace("*", ".*");
-
-                    regex = new Regex(pattern, RegexOptions.Compiled);
-                    CompiledRegexCache[resizer.Path] = regex;
-                }
-
-                if (regex.IsMatch(path))
-                {
-                    CachedMatchedResizers[path] = resizer;
-                    return resizer;
-                }
+                CachedMatchedResizers[path] = resizer;
+                return resizer;
             }
         }
 

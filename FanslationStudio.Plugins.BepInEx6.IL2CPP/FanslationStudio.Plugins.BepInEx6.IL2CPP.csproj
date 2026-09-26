@@ -17,6 +17,7 @@
       https://nuget.samboy.dev/v3/index.json
     </RestoreAdditionalProjectSources>
     <RootNamespace>FanslationStudio.Plugins</RootNamespace>
+    <DefineConstants>$(DefineConstants);IL2CPP</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -79,6 +80,8 @@
       <HintPath>unhollowed\UnityEngine.UI.dll</HintPath>
     </Reference>
   </ItemGroup>
+
+  <Import Project="..\FanslationStudio.Plugins.UnityShared\FanslationStudio.Plugins.UnityShared.projitems" Label="Shared" />
 
   <Target Name="PostBuild" AfterTargets="Build" Condition="'$(CI)' != 'true'">
     <Exec Command="pwsh -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\postBuildScript.ps1&quot; -TargetVer 6.IL2CPP -TargetDir &quot;$(TargetDir)&quot;" />

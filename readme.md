@@ -15,14 +15,23 @@ Pressing Keypad_+ will reload your resizers if something looks screwy.
 You can use Keypad_* to add all text items on screen. Be warned it will grab a lot!
 
 
-You can use * inside the path to indicate a wildcard (ie: match zero or more characters where the * is). This will help you do one resizer for lots of stuff.
+You can use * inside the path to indicate a wildcard (ie: match zero or more characters where the * is, including `/`). This will help you do one resizer for lots of stuff.
+
+Path matching rules (shared by resizers and sprites):
+
+- The pattern must match the **whole** path. `Canvas/*/Title` will not match `Canvas/Panel/Title/Child`; add a trailing `*` (`Canvas/*/Title*`) if you want children too.
+- A leading `/` means "at any depth". `/Title/Text` matches any path ending in `Title/Text`, and `/*` matches everything (use it for a global resizer in a file that sorts last, e.g. `zzz.GlobalResizer.yaml`).
+- Every other character is literal, so `[UI]`, `Text (TMP)` and `.` need no escaping.
+- When several wildcard entries match, the first one loaded wins (files load alphabetically).
+
+> **Changed:** older versions matched wildcard patterns anywhere inside the path, so `A/*/B` also matched `X/A/1/B/C`. If a wildcard resizer stops applying after updating, add a leading `/` or a trailing `*`.
 
 Please note I include zzAddedResizers.yaml in the patch. So if  you want to keep them move them to another yaml file when your done. Please submit any resizers you think make sense!
 
 Here are all the things you can do: (Not including it will keep the controls defaults)
 
 ```yaml
-- path: "GameStart/GameUIRoot/*/FormRoot" # Gets everything that has a FormRoot in it starting with GameStart/GameUIRoot
+- path: "GameStart/GameUIRoot/*/FormRoot" # Any FormRoot at any depth under GameStart/GameUIRoot
   sampleText: "Commission"    # Dumped text so you know what the path was for
   idealFontSize: 30           # The font size you want
   allowWordWrap: false        # Allows word wrapping on component
