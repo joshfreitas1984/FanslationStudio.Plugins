@@ -5,6 +5,7 @@ using FanslationStudio.Plugins.SharpYaml;
 using HarmonyLib;
 using System;
 using UnityEngine;
+using FanslationStudio.Plugins.UnityShared;
 
 namespace FanslationStudio.Plugins.Plugins;
 
@@ -19,21 +20,22 @@ public class StringPatcherPlugin : BasePlugin
 
     public override void Load()
     {
-        _enabled = Config.Bind("General",
-            "Enabled",
-            false,
-            "Turn plugin to replace dyanmic strings that are hardcoded in code").Value;
+        _enabled = PluginConfig.File.Bind("DynamicStringPatcher", "Enabled", false,
+            "Replace dynamic strings that are hardcoded in code, using the translated dynamic string files").Value;
 
         if (!_enabled)
             return;
 
-        var resourcePath = Config.Bind("General", "ResourcePath", "./english",
-            "File to dump the dynamic strings to").Value;
+        var resourcePath = PluginConfig.File.Bind("DynamicStringPatcher", "ResourcePath", "./english",
+            "Folder (relative to BepInEx/) containing the translated dynamic string files").Value;
+        var filePattern = PluginConfig.File.Bind("DynamicStringPatcher", "FilePattern", DynamicStringContract.DefaultFilePattern,
+            "Translated dynamic string files to load from ResourcePath (* matches anything, case is ignored). Every match is loaded, alphabetically").Value;
 
         StringPatcherService = new StringPatcherService(new BepInEx6Logger(base.Log),
             _enabled,
             new Harmony($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher"),
             resourcePath,
+            filePattern,
             Paths.BepInExRootPath,
             new YamlHelper());
 

@@ -7,6 +7,7 @@ using HarmonyLib;
 using System;
 using System.Reflection;
 using UnityEngine;
+using FanslationStudio.Plugins.UnityShared;
 
 namespace FanslationStudio.Plugins.Plugins;
 
@@ -19,10 +20,8 @@ public class TextResizerPlugin : BasePlugin
 
     public override void Load()
     {
-        _enabled = Config.Bind("General",
-            "TextResizerEnabled",
-            true,
-            "Enable Text Resizer plugin").Value;
+        _enabled = PluginConfig.File.Bind("TextResizer", "Enabled", true,
+            "Apply text resizers from BepInEx/resizers/*.yaml").Value;
 
         _logger = new BepInEx6Logger(base.Log);
         _logger.LogInfo($"[TextResizer DEBUG] Load() called, _enabled={_enabled}");

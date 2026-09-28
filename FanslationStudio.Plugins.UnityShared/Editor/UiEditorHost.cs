@@ -1,6 +1,9 @@
 using System;
 using System.IO;
+using BepInEx.Configuration;
+using FanslationStudio.Plugins.DynamicStrings;
 using FanslationStudio.Plugins.Layout;
+using FanslationStudio.Plugins.PrefabText;
 using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.Sprites;
 using FanslationStudio.Plugins.Support;
@@ -23,14 +26,21 @@ internal static class UiEditorHost
     private static bool _layoutsEnabled;
     private static bool _spritesEnabled;
     private static string _lastError;
+    private static ConfigEntry<string> _foreignLanguagePattern;
+    private static ConfigEntry<string> _dumpAssemblies;
+    private static string _managedPath;
+    private static string _gameDataPath;
+    private static IPrefabTextFinder _prefabTextFinder;
+    private static string _rawStringsPath;
 
     public static bool Enabled { get; private set; }
 
-    public static void Initialize(IPluginLogger logger, BepInEx.Configuration.ConfigFile config, IYamlHelper yamlHelper,
-        string bepInExRootPath, string harmonyId)
+    public static void Initialize(IPluginLogger logger, IYamlHelper yamlHelper,
+        string bepInExRootPath, string harmonyId, string managedPath, string gameDataPath, IPrefabTextFinder prefabTextFinder)
     {
         _logger = logger;
         _harmonyId = harmonyId;
+        var config = PluginConfig.File;
 
         Enabled = config.Bind("General", "Enabled", true, "Enable the UI Editor").Value;
         if (!Enabled)
@@ -49,10 +59,24 @@ internal static class UiEditorHost
         var openOnPick = config.Bind("Editor", "OpenOnPick", true,
             "Open the editor window automatically when you pick an element").Value;
         EditorWindow.Configure(windowScale);
-        EditorSettings.AutoSave = config.Bind("Editor", "AutoSave", true,
-            "Save changed rules automatically when you move to another element, switch tab or close the window").Value;
+        var autoSave = config.Bind("Editor", "AutoSave", true,
+            "Save changed rules automatically when you move to another element, switch tab or close the window");
+        EditorSettings.AutoSave = autoSave.Value;
+        // Applies straight away when changed from the Plugin settings view.
+        autoSave.SettingChanged += (_, _) => EditorSettings.AutoSave = autoSave.Value;
         if (openOnPick)
             PickerController.Picked += EditorWindow.Open;
+
+        // Kept as entries and read at dump time, so edits in the Plugin settings view apply
+        // to the next Dump strings press without a restart.
+        _foreignLanguagePattern = config.Bind("Dumping", "ForeignLanguagePattern", DynamicStringSupport.ChineseCharPattern,
+            "Regex pattern for foreign language text to include when dumping strings");
+        _rawStringsPath = Path.Combine(Path.Combine(bepInExRootPath, "plugins"), "rawStrings");
+        _dumpAssemblies = config.Bind("Dumping", "Assemblies", StringDumperService.DefaultAssemblyPatterns,
+            "Assemblies in the game's Managed folder to scan for dynamic strings, separated by ';' (e.g. Assembly-CSharp.dll;Mortal.*.dll)");
+        _managedPath = managedPath;
+        _gameDataPath = gameDataPath;
+        _prefabTextFinder = prefabTextFinder;
 
         if (_layoutsEnabled)
         {
@@ -124,5 +148,22 @@ internal static class UiEditorHost
         }
 
         EditorWindow.SetStatus("Reloaded layouts, sprites and resizers from disk.");
+    }
+
+    /// <summary>Dumps dynamic strings (from IL) and prefab text into BepInEx/plugins/rawStrings.</summary>
+    public static void DumpStrings()
+    {
+        if (!Directory.Exists(_rawStringsPath))
+            Directory.CreateDirectory(_rawStringsPath);
+
+        var pattern = _foreignLanguagePattern.Value;
+        var dynamicCount = new StringDumperService(_logger, pattern, _managedPath, _dumpAssemblies.Value)
+            .DumpFiles(_rawStringsPath);
+        // Prefab text only covers objects Unity has loaded so far, which is why this is a button
+        // rather than something run at startup.
+        var prefabCount = new PrefabTextDumperService(_logger, pattern, _gameDataPath, _prefabTextFinder)
+            .DumpAllPrefabTexts(_rawStringsPath);
+
+        EditorWindow.SetStatus($"Dumped {dynamicCount} dynamic strings and {prefabCount} prefab texts to {_rawStringsPath}");
     }
 }

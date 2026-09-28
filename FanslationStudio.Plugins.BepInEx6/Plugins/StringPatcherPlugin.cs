@@ -11,6 +11,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using FanslationStudio.Plugins.UnityShared;
+using UnityEngine;
 
 namespace FanslationStudio.Plugins.Plugins;
 
@@ -25,29 +27,43 @@ public class StringPatcherPlugin : BaseUnityPlugin
 
     private void Awake()
     {
-        _enabled = Config.Bind("General",
-            "Enabled",
-            false,
-            "Turn plugin to replace dyanmic strings that are hardcoded in code").Value;
+        _enabled = PluginConfig.File.Bind("DynamicStringPatcher", "Enabled", false,
+            "Replace dynamic strings that are hardcoded in code, using the translated dynamic string files").Value;
 
-        var resourcePath = Config.Bind("General", "ResourcePath", "./english",
-            "File to dump the dynamic strings to").Value;
+        var resourcePath = PluginConfig.File.Bind("DynamicStringPatcher", "ResourcePath", "./english",
+            "Folder (relative to BepInEx/) containing the translated dynamic string files").Value;
+        var filePattern = PluginConfig.File.Bind("DynamicStringPatcher", "FilePattern", DynamicStringContract.DefaultFilePattern,
+            "Translated dynamic string files to load from ResourcePath (* matches anything, case is ignored). Every match is loaded, alphabetically").Value;
 
         StringPatcherService = new StringPatcherService(new BepInEx6Logger(base.Logger), 
             _enabled,
             new Harmony($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher"),
             resourcePath,
+            filePattern,
             Paths.BepInExRootPath,
             new YamlHelper());
 
         StringPatcherService.Awake();
-    }
 
-    internal void Update()
-    {
         if (!_enabled)
             return;
 
-        StringPatcherService.EnsurePatched();
+        // Static engine event rather than Update(): see TextResizerPlugin for why.
+        Canvas.willRenderCanvases += Tick;
+    }
+
+    private void Tick()
+    {
+        // Only needed once: EnsurePatched applies the patches on the first frame.
+        Canvas.willRenderCanvases -= Tick;
+
+        try
+        {
+            StringPatcherService.EnsurePatched();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"[DynamicStringPatcher] Tick threw: {ex}");
+        }
     }
 }

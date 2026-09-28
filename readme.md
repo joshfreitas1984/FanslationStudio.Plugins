@@ -6,6 +6,23 @@ You can join us here: [Discord](https://discord.gg/sqXd5ceBWT)
 
 # Plugins
 
+## Configuration
+
+Every plugin's settings live in one file, `BepInEx/config/FanslationStudio.Plugins.UIEditor.cfg`. You can also change them in game: the UI Editor window's **Plugin settings** button (title bar) lists every setting grouped by plugin, and saves as you type. Most changes take effect after restarting the game.
+
+| Section | Settings |
+| --- | --- |
+| `[General]` | `Enabled` - the UI Editor itself |
+| `[Layouts]`, `[Sprites]` | `Enabled` |
+| `[Editor]` | `WindowScale`, `OpenOnPick`, `AutoSave` |
+| `[Hotkeys]` | See Hotkeys below |
+| `[Dumping]` | `ForeignLanguagePattern`, `Assemblies` (default `Assembly-CSharp*.dll`) |
+| `[TextResizer]` | `Enabled` |
+| `[DynamicStringPatcher]` | `Enabled`, `ResourcePath`, `FilePattern` (default `*dynamicStrings*`) |
+| `[PrefabTextReplacer]` | `Enabled`, `ResourcePath`, `FilePattern` (default `*prefabText*`) |
+
+> **Changed:** TextResizer, DynamicStringPatcher and PrefabTextReplacer used to have their own `.cfg` files. Those are no longer read - copy any values you changed into the sections above (`TextResizerEnabled` is now `[TextResizer] Enabled`).
+
 ## UI Editor
 
 An in-game editor for text resizers, layouts (position/size/anchors/visibility) and sprite replacements. Rules are saved as YAML under `BepInEx/`, one folder per kind, all keyed by the element's hierarchy path:
@@ -18,7 +35,7 @@ An in-game editor for text resizers, layouts (position/size/anchors/visibility) 
 
 ### Hotkeys
 
-Defaults, changeable in `BepInEx/config/FanslationStudio.Plugins.UIEditor.cfg` (the config only takes a new default when the key isn't already in the file):
+Defaults, changeable under `[Hotkeys]` in the config or in **Plugin settings** (the config only takes a new default when the key isn't already in the file):
 
 | Action | Default |
 | --- | --- |
@@ -121,10 +138,26 @@ Here are all the things you can do: (Not including it will keep the controls def
   overflow: Overflow          # Overflow mode for TextMeshProGUI
 ```
 
-## Dynamic String Dumper
+## String Dumping
 
-This will dump any dynamic strings found in the compiled assembly that matches the regex pattern set in the plugin config. To turn on switch the enabled flag to true and update the file path to where you want the file to goto.
+The UI Editor window's **Plugin settings** view (title bar button) has a **Dump strings** button. It writes both dumps to `BepInEx/plugins/rawStrings/` (created if missing):
 
-## Prefab Text Dumper
+- `dynamicStrings.txt` - hardcoded strings found in the game's compiled assemblies. Only `Assembly-CSharp*.dll` is scanned by default. If the game keeps its code in other DLLs in `<Game>_Data/Managed`, list them under `[Dumping] Assemblies`, separated by `;` (e.g. `Assembly-CSharp.dll;Mortal.*.dll`). The patcher finds those types without extra setup.
+- `prefabText.txt` - text baked into prefabs. This only sees objects the game has loaded, so press it once you're past the menus/scenes you care about.
 
-This will dump any strings hard coded into prefabs that matches the regex pattern set in the plugin config. To turn on switch the enabled flag to true and update the file path to where you want the file to goto.
+Only strings matching `ForeignLanguagePattern` (under `[Dumping]` in the UI Editor config, CJK characters by default) are included. The `[Dumping]` settings are read each time you press the button, so you don't need to restart after changing them.
+
+## Prefab Text Replacer
+
+Replaces text baked into prefabs and scenes (TextMeshPro and legacy UGUI `Text`) using translated prefab text files. Mono games only (BepInEx 5 and BepInEx 6 Mono) - not available for IL2CPP.
+
+Set `Enabled = true` under `[PrefabTextReplacer]` in the config, then put the translated files in `BepInEx/<ResourcePath>/` (`ResourcePath` defaults to `./english`). Every file matching `FilePattern` (default `*prefabText*`, ignoring case, e.g. `prefabText.txt`, `menus.PrefabText.txt`) is loaded alphabetically; if two files translate the same text, the later one wins. The Dynamic String Patcher works the same way with `*dynamicStrings*`:
+
+```yaml
+- raw: 开始游戏
+  result: Start Game
+- raw: 第一行\n第二行      # Newlines are written as \n, exactly as dumped
+  result: First line\nSecond line
+```
+
+Text is replaced as assets are loaded (`Resources.Load`, asset bundles, including async loads) and in everything already loaded whenever a scene loads.

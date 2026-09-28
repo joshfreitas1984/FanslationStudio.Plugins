@@ -1,5 +1,4 @@
 ﻿using FanslationStudio.Plugins.Shared;
-using HarmonyLib;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -16,63 +15,27 @@ namespace FanslationStudio.Plugins.PrefabText;
 public class PrefabTextDumperService
 {
     public static IPluginLogger Logger;
-    public static bool Enabled = false;
     public static string RegexPattern;
-    public static string DumpFilePath;
     public static string GameDataPath;
-    private readonly string BepinExPath;
 
     // Host-runtime-specific finder for GameObjects/Components. See IPrefabTextFinder for why this
     // can't be a direct Resources.FindObjectsOfTypeAll/GetComponentsInChildren call from Shared.
     private readonly IPrefabTextFinder _elementFinder;
 
-    public PrefabTextDumperService(IPluginLogger logger,
-        string dumpFilePath, string regexPattern, bool enabled, string gameDataPath, string bepinExPath,
+    public PrefabTextDumperService(IPluginLogger logger, string regexPattern, string gameDataPath,
         IPrefabTextFinder elementFinder)
     {
         Logger = logger;
-        DumpFilePath = dumpFilePath;
         RegexPattern = regexPattern;
-        Enabled = enabled;
         GameDataPath = gameDataPath;
-        BepinExPath = bepinExPath;
         _elementFinder = elementFinder;
     }
 
-    // Tracks whether Harmony patching has been applied yet. Patching is deferred (see
-    // EnsurePatched) rather than done immediately in Awake/Load, because under IL2CPP,
-    // Harmony resolves Il2CppType tokens for patch parameter types (e.g. GameObject) via
-    // Il2CppType.From. If this runs before Unity has naturally initialized the relevant
-    // modules, it can force their static cctor to run reentrantly inside Il2CppInterop's
-    // generic-method hook, corrupting memory (AccessViolationException) and crashing the game.
-    private static bool _patched = false;
-
-    public void Awake()
-    {
-        if (!Enabled)
-            return;
-
-        Logger.LogWarning("Prefab Text Dumper plugin is starting...");
-        Logger.LogWarning("Press the dump hotkey once you're in-game (after scenes/UI have loaded) to scan for prefab text.");
-    }
-
     /// <summary>
-    /// Applies the Harmony patches. Must be called after at least one frame/scene has run
-    /// (e.g. from the plugin's Update, not from Awake/Load) so Unity has had a chance to
-    /// naturally initialize the relevant modules before Harmony/Il2CppInterop tries to
-    /// resolve their type tokens - doing this too early can crash the game under IL2CPP.
+    /// Writes prefabText.txt into <paramref name="outputPath"/>. Returns the number of strings dumped.
+    /// Only finds objects Unity has already loaded, so call this once the game is past its menus/scenes.
     /// </summary>
-    public void EnsurePatched()
-    {
-        if (_patched || !Enabled)
-            return;
-
-        Harmony.CreateAndPatchAll(typeof(PrefabTextDumperService));
-        _patched = true;
-        Logger.LogWarning("Prefab Text Dumper plugin patching complete!");
-    }
-
-    public void DumpAllPrefabTexts()
+    public int DumpAllPrefabTexts(string outputPath)
     {
         try
         {
@@ -85,18 +48,20 @@ public class PrefabTextDumperService
 
             if (exportedStrings.Count > 0)
             {
-                var outputPath = Path.Combine(BepinExPath, DumpFilePath);
-                File.WriteAllLines($"{outputPath}/dumpedPrefabText.txt", exportedStrings.OrderBy(s => s));
-                Logger.LogWarning($"Exported {exportedStrings.Count} strings from prefabs to {DumpFilePath}");
+                File.WriteAllLines(Path.Combine(outputPath, PrefabTextContract.FileName), exportedStrings.OrderBy(s => s));
+                Logger.LogWarning($"Exported {exportedStrings.Count} strings from prefabs to {outputPath}");
             }
             else
             {
                 Logger.LogWarning("No prefab strings found matching the pattern");
             }
+
+            return exportedStrings.Count;
         }
         catch (Exception ex)
         {
             Logger.LogError($"Error dumping prefab texts: {ex}");
+            return 0;
         }
     }
 

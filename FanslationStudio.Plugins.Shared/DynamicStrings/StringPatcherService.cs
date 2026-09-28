@@ -22,6 +22,7 @@ public class StringPatcherService
     private Harmony _harmony;
     private string _bepinExRootPath;
     private string _resourcePath;
+    private string _filePattern;
     private static IYamlHelper _yamlHelper;
 
     // Tracks whether patches have been applied yet. Applying is deferred (see EnsurePatched)
@@ -31,15 +32,16 @@ public class StringPatcherService
     // static cctor to run reentrantly inside Il2CppInterop's generic-method hook, corrupting
     // memory (AccessViolationException) and crashing the game.
     private bool _patched = false;
-    private string _pendingFilePath;
+    private string[] _pendingFilePaths;
 
     public StringPatcherService(IPluginLogger logger, bool enabled, 
-        Harmony harmony, string resourcePath, string bepinExRootPath, IYamlHelper yamlHelper)
+        Harmony harmony, string resourcePath, string filePattern, string bepinExRootPath, IYamlHelper yamlHelper)
     {
         Logger = logger;
         _enabled = enabled;
         _harmony = harmony;
         _resourcePath = resourcePath;
+        _filePattern = filePattern;
         _bepinExRootPath = bepinExRootPath;
         _yamlHelper = yamlHelper;
     }
@@ -51,14 +53,13 @@ public class StringPatcherService
 
         Logger.LogMessage("Dynamic String Patcher loading...");
 
-        // Load translations from CSV
         var resourcePath = Path.Combine(_bepinExRootPath, _resourcePath);
-        var filePath = Path.Combine(resourcePath, "dynamicStrings.txt");
+        var filePaths = TranslationFiles.Find(resourcePath, _filePattern);
 
-        if (File.Exists(filePath))
-            _pendingFilePath = filePath;
+        if (filePaths.Length > 0)
+            _pendingFilePaths = filePaths;
         else
-            Logger.LogWarning($"Translation file not found at: {resourcePath}");
+            Logger.LogWarning($"No translation files matching '{_filePattern}' found in: {resourcePath}");
     }
 
     /// <summary>
@@ -69,11 +70,11 @@ public class StringPatcherService
     /// </summary>
     public void EnsurePatched()
     {
-        if (_patched || !_enabled || _pendingFilePath == null)
+        if (_patched || !_enabled || _pendingFilePaths == null)
             return;
 
         _patched = true;
-        LoadTranslationsAndApplyPatches(_pendingFilePath);
+        LoadTranslationsAndApplyPatches(_pendingFilePaths);
     }
 
     public static List<GroupedDynamicStringContracts> GroupedDynamicStringContracts(List<DynamicStringContract> contracts)
@@ -104,14 +105,18 @@ public class StringPatcherService
         return string.Join(",", parameters);
     }
 
-    public void LoadTranslationsAndApplyPatches(string filePath)
+    public void LoadTranslationsAndApplyPatches(string[] filePaths)
     {
-        Logger.LogMessage($"Loading translations from: {filePath}");
-
         var badContractErrors = new List<string>();
-        
-        var lines = File.ReadAllText(filePath);
-        var contracts = _yamlHelper.Deserialize<List<DynamicStringContract>>(lines);
+
+        var contracts = new List<DynamicStringContract>();
+        foreach (var filePath in filePaths)
+        {
+            Logger.LogMessage($"Loading translations from: {filePath}");
+            var fileContracts = _yamlHelper.Deserialize<List<DynamicStringContract>>(File.ReadAllText(filePath));
+            if (fileContracts != null)
+                contracts.AddRange(fileContracts);
+        }
 
         // This is bad because on overloaded functions the addresses will be different
         // we need to match the addresses and the method before grouping
@@ -235,12 +240,16 @@ public class StringPatcherService
     {
         if (!_cachedTypes.TryGetValue(typeContract.Type, out var targetType))
         {
+            // The dump uses Cecil names, which separate nested types with '/'; reflection uses '+'.
+            var reflectionName = typeContract.Type.Replace('/', '+');
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                targetType = assembly.GetType(typeContract.Type);
+                targetType = assembly.GetType(reflectionName);
                 if (targetType != null)
                     break;
             }
+
+            _cachedTypes[typeContract.Type] = targetType;
         }
 
         return targetType;

@@ -11,8 +11,8 @@ public class UiEditorPlugin : BaseUnityPlugin
 {
     private void Awake()
     {
-        UiEditorHost.Initialize(new BepInEx6Logger(base.Logger), Config, new YamlHelper(), Paths.BepInExRootPath,
-            $"{MyPluginInfo.PLUGIN_GUID}.UIEditor");
+        UiEditorHost.Initialize(new BepInEx6Logger(base.Logger), new YamlHelper(), Paths.BepInExRootPath,
+            $"{MyPluginInfo.PLUGIN_GUID}.UIEditor", Paths.ManagedPath, Paths.GameDataPath, new MonoElementFinder());
         if (!UiEditorHost.Enabled)
             return;
 

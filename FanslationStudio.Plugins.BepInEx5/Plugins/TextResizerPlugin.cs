@@ -5,6 +5,7 @@ using FanslationStudio.Plugins.Support;
 using FanslationStudio.Plugins.TextResizer;
 using FanslationStudio.Plugins.YamlDotNet;
 using UnityEngine;
+using FanslationStudio.Plugins.UnityShared;
 
 namespace FanslationStudio.Plugins.Plugins;
 
@@ -28,10 +29,8 @@ internal class TextResizerPlugin : BaseUnityPlugin
 
     private void Awake()
     {
-        _enabled = Config.Bind("General",
-            "TextResizerEnabled",
-            true,
-            "Enable Text Resizer plugin").Value;
+        _enabled = PluginConfig.File.Bind("TextResizer", "Enabled", true,
+            "Apply text resizers from BepInEx/resizers/*.yaml").Value;
 
         if (!_enabled)
             return;

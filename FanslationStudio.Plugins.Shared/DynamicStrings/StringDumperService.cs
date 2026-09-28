@@ -15,52 +15,61 @@ namespace FanslationStudio.Plugins.DynamicStrings;
 public class StringDumperService
 {
     public static IPluginLogger Logger;
-    public static bool Enabled = false;
     public static string RegexPattern;
-    public static string DumpFilePath;
     public static string ManagedPath;
-    private readonly string BepinExPath;
+    public static string[] AssemblyPatterns;
 
-    public StringDumperService(IPluginLogger logger, 
-        string dumpFilePath, string regexPattern, bool enabled, string managedPath, string bepinExPath)
+    /// <param name="assemblyPatterns">
+    /// File globs (relative to <paramref name="managedPath"/>) for the assemblies to scan, separated by ';'.
+    /// Games often split their code out of Assembly-CSharp.dll, e.g. "Assembly-CSharp.dll;Mortal.*.dll".
+    /// </param>
+    public StringDumperService(IPluginLogger logger, string regexPattern, string managedPath, string assemblyPatterns = DefaultAssemblyPatterns)
     {
         Logger = logger;
-        DumpFilePath = dumpFilePath;
         RegexPattern = regexPattern;
-        Enabled = enabled;
         ManagedPath = managedPath;
-        BepinExPath = bepinExPath;
+        AssemblyPatterns = (assemblyPatterns ?? DefaultAssemblyPatterns)
+            .Split([';'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Trim())
+            .Where(p => p.Length > 0)
+            .ToArray();
     }
 
-    public void Awake()
-    {
-        if (Enabled)
-            DumpFiles(DumpFilePath);
-    }
+    public const string DefaultAssemblyPatterns = "Assembly-CSharp*.dll";
 
-    public void DumpFiles(string outputPath)
+    /// <summary>Writes dynamicStrings.txt into <paramref name="outputPath"/>. Returns the number of strings dumped.</summary>
+    public int DumpFiles(string outputPath)
     {
-        Logger.LogError("Dumping dynamic strings...");
+        Logger.LogWarning("Dumping dynamic strings...");
 
         try
         {
-            outputPath = Path.Combine(BepinExPath, outputPath);
-            string gamePath = ManagedPath;
-            string assemblyPath = Path.Combine(gamePath, "Assembly-CSharp.dll");
-
             var contracts = new List<DynamicStringContract>();
-            var assembly = AssemblyDefinition.ReadAssembly(assemblyPath);
 
-            int count = 0;
+            // Resolve references from the game's own folder rather than wherever BepInEx runs from.
+            using var resolver = new DefaultAssemblyResolver();
+            resolver.AddSearchDirectory(ManagedPath);
+            var readerParameters = new ReaderParameters { AssemblyResolver = resolver };
 
-            foreach (var module in assembly.Modules)
+            foreach (var assemblyPath in FindAssemblies())
             {
-                foreach (var type in module.Types)
+                try
                 {
-                    ProcessType(type, contracts);
-                    count++;
+                    using var assembly = AssemblyDefinition.ReadAssembly(assemblyPath, readerParameters);
+                    int before = contracts.Count;
+
+                    foreach (var module in assembly.Modules)
+                        foreach (var type in module.Types)
+                            ProcessType(type, contracts);
+
+                    Logger.LogInfo($"{Path.GetFileName(assemblyPath)}: {contracts.Count - before} strings");
                 }
-            }            
+                catch (Exception ex)
+                {
+                    // One unreadable assembly shouldn't cost the rest of the dump.
+                    Logger.LogError($"Error reading {assemblyPath}: {ex.Message}");
+                }
+            }
 
             var lines = new List<string>();
             foreach (var contract in contracts)
@@ -69,12 +78,14 @@ public class StringDumperService
                 lines.Add($"{CleanForCsv(contract.Type)},{CleanForCsv(contract.Method)},{CleanForCsv(contract.ILOffset.ToString())},{CleanForCsv(contract.Raw)},{parameters}");
             }
 
-            File.WriteAllLines($"{outputPath}/dynamicStrings.txt", lines);
+            File.WriteAllLines(Path.Combine(outputPath, DynamicStringContract.FileName), lines);
             Logger.LogWarning($"Dumped to: {outputPath}");
+            return lines.Count;
         }
         catch (Exception ex)
         {
             Logger.LogError($"Error dumping: {ex.Message}");
+            return 0;
         }
 
         //SafeFunctions.Sort();
@@ -85,6 +96,20 @@ public class StringDumperService
 
         //foreach (var f in UnsafeFunctions)
         //    Logger.LogWarning($"Unsafe: {f}");
+    }
+
+    private IEnumerable<string> FindAssemblies()
+    {
+        var paths = AssemblyPatterns
+            .SelectMany(pattern => Directory.GetFiles(ManagedPath, pattern))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (paths.Count == 0)
+            Logger.LogWarning($"No assemblies in {ManagedPath} match {string.Join(";", AssemblyPatterns)}");
+
+        return paths;
     }
 
     public string CleanForCsv(string input)
@@ -99,7 +124,7 @@ public class StringDumperService
         // Process nested types
         foreach (var nestedType in type.NestedTypes)
             if (!stringReferences.Any(r => r.Type == nestedType.ToString()) && recursionLevel < 15) //15 should be fine
-                ProcessType(nestedType, stringReferences, recursionLevel++);
+                ProcessType(nestedType, stringReferences, recursionLevel + 1);
 
         // Process methods
         foreach (var method in type.Methods)

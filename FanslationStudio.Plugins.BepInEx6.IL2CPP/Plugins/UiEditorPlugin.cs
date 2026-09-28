@@ -14,8 +14,8 @@ public class UiEditorPlugin : BasePlugin
 
     public override void Load()
     {
-        UiEditorHost.Initialize(new BepInEx6Logger(base.Log), Config, new YamlHelper(), Paths.BepInExRootPath,
-            $"{MyPluginInfo.PLUGIN_GUID}.UIEditor");
+        UiEditorHost.Initialize(new BepInEx6Logger(base.Log), new YamlHelper(), Paths.BepInExRootPath,
+            $"{MyPluginInfo.PLUGIN_GUID}.UIEditor", Paths.ManagedPath, Paths.GameDataPath, new Il2CppElementFinder());
         if (!UiEditorHost.Enabled)
             return;
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using BepInEx;
 using FanslationStudio.Plugins.Support;
@@ -54,6 +54,7 @@ internal static class EditorWindow
     private static UiPanel _header;
     private static UiPanel _content;
     private static UiPanel _popup;
+    private static UiPanel _settings;
     private static Text _status;
 
     private static ListMode _listMode = ListMode.UnderCursor;
@@ -76,11 +77,14 @@ internal static class EditorWindow
 
     public static bool IsOpen => _root != null && _root.activeSelf;
 
+    private static bool SettingsOpen => _settings != null && _settings.Rect.gameObject.activeSelf;
+
     /// <summary>True while the user is typing in a field, so global hotkeys should stand down.</summary>
     public static bool IsTyping => IsOpen && (
         (_content != null && _content.AnyInputFocused) ||
         (_header != null && _header.AnyInputFocused) ||
-        (_listTop != null && _listTop.AnyInputFocused));
+        (_listTop != null && _listTop.AnyInputFocused) ||
+        (SettingsOpen && _settings.AnyInputFocused));
 
     public static void Configure(float scale)
     {
@@ -89,6 +93,7 @@ internal static class EditorWindow
         PickerController.Picked += () =>
         {
             // A fresh pick is about what's under the cursor.
+            CloseSettings();
             if (_listMode != ListMode.UnderCursor)
                 SetListMode(ListMode.UnderCursor);
         };
@@ -112,6 +117,7 @@ internal static class EditorWindow
             return;
 
         LeaveTab();
+        CloseSettings();
         _root.SetActive(false);
         _dragging = false;
     }
@@ -163,6 +169,15 @@ internal static class EditorWindow
         var mouse = (Vector2)input.mousePosition;
 
         PollDrag(input, mouse);
+
+        if (SettingsOpen)
+        {
+            // The settings view covers the whole body, so only it and the title bar take input.
+            if (!_dragging && input.GetMouseButtonDown(0) && !_titleBar.HandleClick(mouse))
+                _settings.HandleClick(mouse);
+            _settings.PollInputs();
+            return;
+        }
 
         if (!_dragging && input.GetMouseButtonDown(0))
         {
@@ -231,6 +246,32 @@ internal static class EditorWindow
             return;
         Object.Destroy(_popup.Rect.gameObject);
         _popup = null;
+    }
+
+    // ---- Plugin settings ---------------------------------------------------------------------
+
+    private static void ToggleSettings()
+    {
+        if (SettingsOpen)
+        {
+            CloseSettings();
+            return;
+        }
+
+        // Leave the tab first so auto-save runs before the settings cover it.
+        LeaveTab();
+        _selectionDirty = true;
+        _settings.Clear();
+        _settings.Rect.gameObject.SetActive(true);
+        SettingsView.Build(_settings, CloseSettings);
+    }
+
+    private static void CloseSettings()
+    {
+        if (!SettingsOpen)
+            return;
+        _settings.Clear();
+        _settings.Rect.gameObject.SetActive(false);
     }
 
     // ---- Left column -------------------------------------------------------------------------
@@ -650,8 +691,10 @@ internal static class EditorWindow
         _titleBar.Label("UI Editor", Padding, 0, 300, TitleHeight, 14, TextAnchor.MiddleLeft, null, FontStyle.Bold);
         _titleBar.Label($"{UiEditorHotkeys.Describe(PickerController.Hotkeys.ToggleWindow)}: show/hide", 320, 0, 300, TitleHeight, 11,
             TextAnchor.MiddleLeft, UiPanel.DimTextColor);
+        _titleBar.Button("Plugin settings", WindowWidth - 168, 3, 130, TitleHeight - 6, ToggleSettings, UiPanel.MutedButtonColor);
         _titleBar.Button("X", WindowWidth - 34, 3, 28, TitleHeight - 6, Close, UiPanel.DangerColor);
-        _dragHandle = UiPanel.Create(_titleBar.Rect, "DragHandle", 0, 0, WindowWidth - 40, TitleHeight).Rect;
+        // Stops short of the buttons so clicking them doesn't also start a drag.
+        _dragHandle = UiPanel.Create(_titleBar.Rect, "DragHandle", 0, 0, WindowWidth - 174, TitleHeight).Rect;
 
         var bodyTop = TitleHeight + Padding;
         var bodyHeight = WindowHeight - bodyTop - StatusHeight - Padding;
@@ -664,6 +707,11 @@ internal static class EditorWindow
         _header = UiPanel.Create(_window, "Header", rightX, bodyTop, rightWidth, HeaderHeight);
         _content = UiPanel.Create(_window, "Content", rightX, bodyTop + HeaderHeight + 8f, rightWidth,
             bodyHeight - HeaderHeight - 8f);
+
+        // Created after the body panels so it draws over them; hidden until opened.
+        _settings = UiPanel.Create(_window, "Settings", Padding, bodyTop, WindowWidth - 2 * Padding, bodyHeight,
+            new Color(0.08f, 0.08f, 0.1f, 1f));
+        _settings.Rect.gameObject.SetActive(false);
 
         var statusPanel = UiPanel.Create(_window, "Status", Padding, WindowHeight - StatusHeight - 6f, WindowWidth - 2 * Padding, StatusHeight);
         _status = statusPanel.Label(string.Empty, 0, 0, WindowWidth - 2 * Padding, StatusHeight, 12, TextAnchor.MiddleLeft, UiPanel.DimTextColor);

@@ -52,6 +52,26 @@ keyed by hierarchy path: `BepInEx/resizers/`, `layouts/`, `sprites2/` (PNGs in `
 - Each tab implements `IEditorTab`. Tabs auto-save dirty rules on `Leave`.
 - `PathPattern`: whole-path match, `*` spans `/`, a leading `/` means "any depth" (`/*` = all).
 
+## Mono plugin ticking: never rely on `Update()`
+
+On at least one BepInEx 5 game (Legend of Mortal), the host deactivates the plugin GameObject
+just after chainloader startup, so `BaseUnityPlugin.Update()` silently never fires. Mono plugins
+must tick from the static `Canvas.willRenderCanvases` event instead (one-shot for deferred
+`EnsurePatched`, e.g. `StringPatcherPlugin`/`PrefabTextReplacerPlugin`; per-frame for
+`TextResizerPlugin`/`UiEditorHost.Tick`). Wrap the handler in try/catch so it never throws into
+the engine event.
+
+## Dynamic strings (Shared/DynamicStrings)
+
+- `StringDumperService` scans the Managed-folder assemblies matched by `[Dumping] Assemblies`
+  (`;`-separated globs, default `Assembly-CSharp*.dll`). Games often move code into their own DLLs
+  (e.g. `Mortal.*.dll`), which dump nothing unless listed.
+- `UiEditorHost` reads the `[Dumping]` entries when **Dump strings** is pressed, not at startup,
+  so edits in the settings view apply without a restart.
+- The dump uses Cecil type names (nested types separated by `/`); `StringPatcherService.GetTargetType`
+  converts to reflection names (`+`) and searches every loaded assembly, so no per-assembly setup
+  is needed on the patch side. It only sees assemblies already loaded on the first frame.
+
 ## Unity 2020 Mono compatibility (older games)
 
 Some games ship a Unity 2020 Mono BCL that lacks netstandard2.1 APIs. They fail at runtime with
@@ -298,13 +318,9 @@ Known instances still open (found by repo-wide grep, not yet fixed) as of this n
   following the same pattern as `TextResizerGameObjectPatches.cs` (uses
   `Il2CppType.From(typeof(Image))` for the type-filtered `GetComponentsInChildren` call), with its
   own deferred `EnsurePatched()` called from `SpriteReplacerPlugin.RunUpdate()`.
-- `FanslationStudio.Plugins.Shared\PrefabText\PrefabTextDumperService.cs` -
-  `Resources.FindObjectsOfTypeAll(typeof(GameObject))` and
-  `gameObject.GetComponentsInChildren(typeof(Component), true)`. **Dormant, not actively fixed**:
-  its only consumer, `BepInEx5\Plugins\PrefabTextDumperPlugin.cs`, is entirely commented out (dead
-  code) - no host project currently constructs this service, so there's no live crash path and no
-  way to test a fix in-game. If this plugin is re-enabled, move its Unity calls into
-  `UnityShared` (or a per-host finder interface).
+- `FanslationStudio.Plugins.Shared\PrefabText\PrefabTextDumperService.cs` - **Resolved**: its
+  Unity calls go through the per-host `IPrefabTextFinder` (`MonoElementFinder`/`Il2CppElementFinder`).
+  It is constructed by `UiEditorHost` and run from the "Dump strings" button in the editor window's Plugin settings view (`Editor/SettingsView.cs`).
 - ~~`TextResizerService.FindTextElementsUnderCursor()`/`FindLegacyTextElementsUnderCursor()` and
   `SpriteReplacerService.FindElementsAtCursor()` - `rectTransform.GetWorldCorners(Vector3[])`~~
   **Resolved**: same root cause as item 4 (instance method, non-generic, but still Shared-compiled

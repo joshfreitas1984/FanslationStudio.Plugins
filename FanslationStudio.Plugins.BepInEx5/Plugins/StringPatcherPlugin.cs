@@ -12,6 +12,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using FanslationStudio.Plugins.UnityShared;
+using UnityEngine;
 
 namespace FanslationStudio.Plugins.Plugins;
 
@@ -20,8 +22,8 @@ namespace FanslationStudio.Plugins.Plugins;
 // and we don't want to use reflection everywhere.
 public class StringPatcherServiceWrapper : StringPatcherService
 {
-    public StringPatcherServiceWrapper(IPluginLogger logger, bool enabled, Harmony harmony, string resourcePath, string bepinExRootPath, IYamlHelper yamlHelper)
-        : base(logger, enabled, harmony, resourcePath, bepinExRootPath, yamlHelper)
+    public StringPatcherServiceWrapper(IPluginLogger logger, bool enabled, Harmony harmony, string resourcePath, string filePattern, string bepinExRootPath, IYamlHelper yamlHelper)
+        : base(logger, enabled, harmony, resourcePath, filePattern, bepinExRootPath, yamlHelper)
     {
     }
 }
@@ -37,28 +39,42 @@ public class StringPatcherPlugin : BaseUnityPlugin
 
     private void Awake()
     {
-        _enabled = Config.Bind("General",
-            "Enabled",
-            false,
-            "Turn plugin to replace dyanmic strings that are hardcoded in code").Value;
-        var resourcePath = Config.Bind("General", "ResourcePath", "./english",
-            "File to dump the dynamic strings to").Value;
+        _enabled = PluginConfig.File.Bind("DynamicStringPatcher", "Enabled", false,
+            "Replace dynamic strings that are hardcoded in code, using the translated dynamic string files").Value;
+        var resourcePath = PluginConfig.File.Bind("DynamicStringPatcher", "ResourcePath", "./english",
+            "Folder (relative to BepInEx/) containing the translated dynamic string files").Value;
+        var filePattern = PluginConfig.File.Bind("DynamicStringPatcher", "FilePattern", DynamicStringContract.DefaultFilePattern,
+            "Translated dynamic string files to load from ResourcePath (* matches anything, case is ignored). Every match is loaded, alphabetically").Value;
 
         StringPatcherService = new StringPatcherServiceWrapper(new BepInEx5Logger(base.Logger),
             _enabled,
             new Harmony($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher"),
             resourcePath,
+            filePattern,
             Paths.BepInExRootPath,
             new YamlHelper());
 
         StringPatcherService.Awake();
-    }
 
-    internal void Update()
-    {
         if (!_enabled)
             return;
 
-        StringPatcherService.EnsurePatched();
+        // Static engine event rather than Update(): see TextResizerPlugin for why.
+        Canvas.willRenderCanvases += Tick;
+    }
+
+    private void Tick()
+    {
+        // Only needed once: EnsurePatched applies the patches on the first frame.
+        Canvas.willRenderCanvases -= Tick;
+
+        try
+        {
+            StringPatcherService.EnsurePatched();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"[DynamicStringPatcher] Tick threw: {ex}");
+        }
     }
 }
