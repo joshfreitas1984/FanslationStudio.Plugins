@@ -27,19 +27,16 @@ internal static class HighlightOverlay
     private static Vector2 _lastMin;
     private static Vector2 _lastMax;
 
+    /// <summary>Highlights <paramref name="target"/>, or with a null target shows just the status line.</summary>
     public static void Show(RectTransform target, string statusText)
     {
-        if (target == null)
-        {
-            Hide();
-            return;
-        }
-
         EnsureBuilt();
         if (!_root.activeSelf)
             _root.SetActive(true);
 
-        var hasBounds = TryGetScreenBounds(target, out var min, out var max);
+        var min = Vector2.zero;
+        var max = Vector2.zero;
+        var hasBounds = target != null && TryGetScreenBounds(target, out min, out max);
         SetHighlightActive(hasBounds);
 
         if (hasBounds)

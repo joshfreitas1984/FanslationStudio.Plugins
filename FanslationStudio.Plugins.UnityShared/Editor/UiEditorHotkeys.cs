@@ -15,6 +15,8 @@ internal sealed class UiEditorHotkeys
 {
     // Unity numbers mouse buttons from 0: Mouse2 = middle, Mouse3 = back, Mouse4 = forward.
     public KeyboardShortcut Pick = new KeyboardShortcut(KeyCode.Mouse2, KeyCode.LeftAlt);
+    public KeyboardShortcut PickAppeared = new KeyboardShortcut(KeyCode.Alpha2, KeyCode.LeftAlt);
+    public KeyboardShortcut PickAppearedShift = new KeyboardShortcut(KeyCode.Alpha2, KeyCode.LeftShift, KeyCode.LeftAlt);
     public KeyboardShortcut Clear = new KeyboardShortcut(KeyCode.Mouse3, KeyCode.LeftAlt);
     public KeyboardShortcut Next = new KeyboardShortcut(KeyCode.PageDown);
     public KeyboardShortcut Previous = new KeyboardShortcut(KeyCode.PageUp);
@@ -70,8 +72,13 @@ internal sealed class UiEditorHotkeys
         {
             Pick = config.Bind("Hotkeys", "Pick", defaults.Pick,
                 "Collects every UI element under the cursor, selects the topmost one and opens the editor. Mouse3 = back side button, Mouse4 = forward, Mouse2 = middle").Value,
+            PickAppeared = config.Bind("Hotkeys", "PickAppeared", defaults.PickAppeared,
+                "For tooltips and popups: press once to remember what's on screen, hover to open the tooltip, then " +
+                "press again to pick whatever appeared or changed (or what's under the cursor if nothing did)").Value,
+            PickAppearedShift = config.Bind("Hotkeys", "PickAppearedShift", defaults.PickAppearedShift,
+                "Same as PickAppeared, for games that only show popups while Shift is held").Value,
             Clear = config.Bind("Hotkeys", "ClearSelection", defaults.Clear,
-                "Clears the current selection and hides the highlight").Value,
+                "Clears the current selection and hides the highlight. Also cancels a PickAppeared in progress").Value,
             Next = config.Bind("Hotkeys", "NextElement", defaults.Next,
                 "Selects the next (lower) element under the cursor. WheelModifier + mouse wheel also works").Value,
             Previous = config.Bind("Hotkeys", "PreviousElement", defaults.Previous,

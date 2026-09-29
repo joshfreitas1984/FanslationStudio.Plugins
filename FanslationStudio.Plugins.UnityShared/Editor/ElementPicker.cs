@@ -23,7 +23,61 @@ internal static class ElementPicker
     // but real elements; the old 0.5f threshold was large enough to hide legitimate small labels.
     private const float MinPickableSize = 0.01f;
 
-    public static List<PickedElement> PickAt(Vector2 screenPoint)
+    public static List<PickedElement> PickAt(Vector2 screenPoint) =>
+        ToPickedElements(Collect(screenPoint));
+
+    /// <summary>What every visible element looks like right now, for <see cref="PickChangedSince"/>.</summary>
+    public static Dictionary<int, string> SnapshotVisible()
+    {
+        var snapshot = new Dictionary<int, string>();
+        foreach (var hit in Collect(null))
+        {
+            if (!hit.IsHidden)
+                snapshot[hit.RectTransform.GetInstanceID()] = Signature(hit);
+        }
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Every visible element that is new since <paramref name="snapshot"/>, or has moved, resized,
+    /// faded in or changed its text, topmost first. Finds tooltips and popups wherever they are
+    /// drawn (they rarely sit under the cursor), including reused ones the game keeps active and
+    /// just fills in and moves into place.
+    /// </summary>
+    public static List<PickedElement> PickChangedSince(Dictionary<int, string> snapshot)
+    {
+        var hits = Collect(null);
+        hits.RemoveAll(h => h.IsHidden
+                            || (snapshot.TryGetValue(h.RectTransform.GetInstanceID(), out var before) && before == Signature(h)));
+        return ToPickedElements(hits);
+    }
+
+    // Screen bounds (whole pixels, so float noise isn't a change) plus the text.
+    private static string Signature(Hit hit)
+    {
+        var min = new Vector2(float.MaxValue, float.MaxValue);
+        var max = new Vector2(float.MinValue, float.MinValue);
+        foreach (var corner in UiCompat.GetWorldCorners(hit.RectTransform))
+        {
+            var screen = RectTransformUtility.WorldToScreenPoint(hit.Camera, corner);
+            min = Vector2.Min(min, screen);
+            max = Vector2.Max(max, screen);
+        }
+
+        return $"{Mathf.RoundToInt(min.x)},{Mathf.RoundToInt(min.y)},{Mathf.RoundToInt(max.x)},{Mathf.RoundToInt(max.y)}|" +
+               PickedElement.ReadText(hit.RectTransform);
+    }
+
+    private static List<PickedElement> ToPickedElements(List<Hit> hits)
+    {
+        var result = new List<PickedElement>(hits.Count);
+        foreach (var hit in hits)
+            result.Add(PickedElement.From(hit.RectTransform, hit.IsHidden));
+        return result;
+    }
+
+    /// <summary>Pickable elements containing <paramref name="screenPoint"/> (or all of them when null), topmost first.</summary>
+    private static List<Hit> Collect(Vector2? screenPoint)
     {
         var hits = new List<Hit>();
         // Ancestry lookups are interop calls under IL2CPP; share them between siblings.
@@ -51,19 +105,18 @@ internal static class ElementPicker
             if (rect.width <= MinPickableSize || rect.height <= MinPickableSize)
                 continue;
 
-            var camera = rootCanvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : rootCanvas.worldCamera;
-            if (!RectTransformUtility.RectangleContainsScreenPoint(rectTransform, screenPoint, camera))
-                continue;
+            if (screenPoint.HasValue)
+            {
+                var camera = rootCanvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : rootCanvas.worldCamera;
+                if (!RectTransformUtility.RectangleContainsScreenPoint(rectTransform, screenPoint.Value, camera))
+                    continue;
+            }
 
             hits.Add(new Hit(rectTransform, canvas, rootCanvas, info.Hidden));
         }
 
         hits.Sort((a, b) => CompareDrawOrder(b, a)); // topmost (drawn last) first
-
-        var result = new List<PickedElement>(hits.Count);
-        foreach (var hit in hits)
-            result.Add(PickedElement.From(hit.RectTransform, hit.IsHidden));
-        return result;
+        return hits;
     }
 
     private static AncestryInfo GetAncestry(Transform transform, Dictionary<int, AncestryInfo> cache)
@@ -152,6 +205,7 @@ internal static class ElementPicker
         public RectTransform RectTransform { get; }
         public Canvas Canvas { get; }
         public bool IsOverlay { get; }
+        public Camera Camera { get; }
         public int SortingLayerValue { get; }
         public List<int> SiblingPath { get; }
         public bool IsHidden { get; }
@@ -161,6 +215,7 @@ internal static class ElementPicker
             RectTransform = rectTransform;
             Canvas = canvas;
             IsOverlay = rootCanvas.renderMode == RenderMode.ScreenSpaceOverlay;
+            Camera = IsOverlay ? null : rootCanvas.worldCamera;
             SortingLayerValue = GetSortingLayerValue(canvas);
             IsHidden = isHidden;
 

@@ -78,9 +78,13 @@ internal sealed class LayoutTab : IEditorTab
     public void Build(UiPanel panel, PickedElement element, string rulePath)
     {
         _panel = panel;
+        var previous = _element;
         _element = element;
-        // Without an element on screen there are no originals; blank components mean 0.
-        _original = element != null ? LayoutApplier.GetOriginal(element.RectTransform) : default;
+        // Without an element on screen there are no originals; blank components mean 0. One the
+        // game destroyed since (a closed tooltip) keeps the originals read while it was alive.
+        _original = element == null ? default
+            : element.IsAlive ? LayoutApplier.GetOriginal(element.RectTransform)
+            : element.IsSameAs(previous) ? _original : default;
 
         // Exact match only - a wildcard rule that merely happens to affect this element is never
         // loaded as the editable working copy, or Save would edit/rename the shared wildcard
@@ -282,7 +286,7 @@ internal sealed class LayoutTab : IEditorTab
         else
             info = $"Rule from {Path.GetFileName(LayoutApplier.Repository.GetSourceFile(_savedPath))}.";
 
-        var parent = _element?.RectTransform.parent;
+        var parent = _element != null && _element.IsAlive ? _element.RectTransform.parent : null;
         var parentGroup = parent == null ? null : UiCompat.GetComponent<LayoutGroup>(parent);
         if (parentGroup != null && parentGroup.enabled)
         {

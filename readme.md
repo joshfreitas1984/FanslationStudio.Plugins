@@ -40,11 +40,12 @@ Defaults, changeable under `[Hotkeys]` in the config or in **Plugin settings** (
 | Action | Default |
 | --- | --- |
 | Pick the element under the cursor | Alt + Middle Click |
+| Pick a tooltip or popup: press once, hover to open it, press again to pick whatever appeared or changed | Alt + 2 (or Shift + Alt + 2 for games that need Shift held) |
 | Cycle through the elements under the cursor | Alt + Mouse Wheel (or Page Up / Page Down) |
 | Go to parent / child | `[` / `]` |
-| Clear the selection | Alt + Mouse Forward |
+| Clear the selection | Alt + Mouse Back |
 | Show / hide the editor window | Alt + 1 |
-| Reload layouts, sprites and resizers from disk | Alt + Mouse Back |
+| Reload layouts, sprites and resizers from disk | Alt + Mouse Forward |
 
 Picking highlights the element (pink tint, outline and a status bar at the top) and opens the editor window. Hotkeys are ignored while you type in a text box.
 
@@ -100,7 +101,7 @@ Workflow in the Sprite tab: **Dump original** (writes just that sprite, not its 
 
 ## Custom Text Resizer
 
-Resizers are created and edited in the UI Editor's Text tab, or by hand in `BepInEx/resizers/*.yaml`. The old TextResizer hotkeys (Keypad / * +) have been removed; use Alt + Middle Click to reload.
+Resizers are created and edited in the UI Editor's Text tab, or by hand in `BepInEx/resizers/*.yaml`. The old TextResizer hotkeys (Keypad / * +) have been removed; use Alt + Mouse Forward to reload.
 
 You can use * inside the path to indicate a wildcard (ie: match zero or more characters where the * is, including `/`). This will help you do one resizer for lots of stuff.
 

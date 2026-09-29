@@ -65,7 +65,7 @@ internal static class EditorWindow
     private static bool _selectionDirty = true;
     private static int _tabIndex;
     private static IEditorTab _builtTab;
-    private static RectTransform _builtElement;
+    private static PickedElement _builtElement;
     private static string _builtRulePath;
 
     // Set when a rule is chosen in the Rules list; consumed by the next RebuildElement.
@@ -138,6 +138,17 @@ internal static class EditorWindow
         var layoutTabIndex = _tabs.FindIndex(t => t is LayoutTab);
         _tabIndex = layoutTabIndex >= 0 ? layoutTabIndex : 0;
         _rulePage = 0;
+        _selectionDirty = true;
+    }
+
+    /// <summary>
+    /// Opens a saved rule in the current tab while keeping the selected element - e.g. the
+    /// wildcard resizer the element falls back to.
+    /// </summary>
+    public static void OpenRuleForSelected(string ruleKey)
+    {
+        LeaveTab();
+        _openRulePath = ruleKey;
         _selectionDirty = true;
     }
 
@@ -341,7 +352,7 @@ internal static class EditorWindow
         {
             var element = stack[i];
             var index = i;
-            var isSelected = selected != null && element.RectTransform == selected.RectTransform;
+            var isSelected = element.IsSameAs(selected);
             _listBody.Button(string.Empty, 0, y, width, rowHeight, () => PickerController.SelectStackIndex(index),
                 isSelected ? UiPanel.SelectedColor : UiPanel.MutedButtonColor);
             _listBody.Label($"{i + 1}. {PickedElement.Truncate(element.Name, 22)} {Tags(element)}", 6, y, width - 8, rowHeight, 12);
@@ -546,7 +557,7 @@ internal static class EditorWindow
 
         // Re-selecting the element that's already open (e.g. re-picking the same spot) keeps
         // the tab as-is, so in-progress edits aren't thrown away.
-        if (rulePath == null && element != null && _builtTab != null && element.RectTransform == _builtElement)
+        if (rulePath == null && element != null && _builtTab != null && element.IsSameAs(_builtElement))
         {
             RebuildHeader(element, _builtRulePath);
             return;
@@ -569,7 +580,7 @@ internal static class EditorWindow
         var tab = _tabs[_tabIndex];
         tab.Build(_content, element, rulePath);
         _builtTab = tab;
-        _builtElement = element?.RectTransform;
+        _builtElement = element;
         _builtRulePath = rulePath;
     }
 

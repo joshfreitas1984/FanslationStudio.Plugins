@@ -71,7 +71,7 @@ internal sealed class SpriteTab : IEditorTab
     {
         _panel = panel;
         _element = element;
-        _image = element != null ? UiCompat.GetComponent<Image>(element.RectTransform) : null;
+        _image = element != null && element.IsAlive ? UiCompat.GetComponent<Image>(element.RectTransform) : null;
         _original = SpriteApplier.GetOriginalSprite(_image);
 
         var repository = SpriteApplier.Repository;

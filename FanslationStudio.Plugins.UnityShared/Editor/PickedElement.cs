@@ -34,14 +34,25 @@ internal sealed class PickedElement
     /// <summary>True if a CanvasGroup fades this element out (alpha ~0); still pickable, just not visible.</summary>
     public bool IsHidden { get; private set; }
 
+    /// <summary>
+    /// False once the game destroys the element (e.g. a tooltip closing). The element stays
+    /// selectable and editable - rules are saved by <see cref="Path"/>, and the rest of what the
+    /// tabs need was captured when it was picked - there's just no live preview.
+    /// </summary>
     public bool IsAlive => RectTransform != null;
-    public string Name => RectTransform != null ? RectTransform.name : "(destroyed)";
+    public string Name => IsAlive ? RectTransform.name : $"{_name} (closed)";
+    private string _name;
+
+    /// <summary>Same element, even after it's destroyed (when Unity's == says every dead object is equal).</summary>
+    public bool IsSameAs(PickedElement other) =>
+        other != null && (ReferenceEquals(this, other) || (IsAlive && other.IsAlive && RectTransform == other.RectTransform));
 
     public static PickedElement From(RectTransform rectTransform, bool isHidden = false)
     {
         var element = new PickedElement
         {
             RectTransform = rectTransform,
+            _name = rectTransform.name,
             Path = ObjectHelper.GetGameObjectPath(rectTransform.gameObject),
             IsHidden = isHidden,
         };
@@ -90,6 +101,32 @@ internal sealed class PickedElement
 #else
         return component.GetType().Name;
 #endif
+    }
+
+    /// <summary>The element's text (TMP or legacy), or null if it has none.</summary>
+    internal static string ReadText(RectTransform rectTransform)
+    {
+        var legacyText = UiCompat.GetComponent<Text>(rectTransform);
+        if (legacyText != null)
+            return legacyText.text;
+
+        try
+        {
+            return ReadTmpText(rectTransform);
+        }
+        catch (TypeLoadException)
+        {
+        }
+        catch (System.IO.FileNotFoundException)
+        {
+        }
+        return null;
+    }
+
+    private static string ReadTmpText(RectTransform rectTransform)
+    {
+        var tmp = UiCompat.GetComponent<TMP_Text>(rectTransform);
+        return tmp == null ? null : tmp.text;
     }
 
     // TMP is looked up in its own method so a game without Unity.TextMeshPro fails only this call

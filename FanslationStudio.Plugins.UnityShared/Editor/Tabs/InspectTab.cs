@@ -44,7 +44,7 @@ internal sealed class InspectTab : IEditorTab
     public void Build(UiPanel panel, PickedElement element, string ruleKey)
     {
         _panel = panel;
-        _root = element?.RectTransform;
+        _root = element != null && element.IsAlive ? element.RectTransform : null;
         _selectedIndex = 0;
         RefreshComponents();
         Render();

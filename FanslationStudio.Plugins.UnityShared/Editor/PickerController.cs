@@ -19,7 +19,14 @@ internal static class PickerController
     private static List<PickedElement> _stack = new List<PickedElement>();
     private static int _stackIndex = -1;
     private static PickedElement _selected;
+    private static bool _selectedWasAlive;
     private static bool _logOverlayState;
+
+    // Pick appeared: the first press snapshots what's on screen, the user hovers to open a tooltip
+    // or popup, and the second press picks whatever appeared, moved or changed its text. A cursor pick can't do this -
+    // tooltips close when the cursor leaves their trigger and are rarely drawn under it.
+    private static Dictionary<int, string> _appearedSnapshot;
+    private static bool IsWaitingForAppeared => _appearedSnapshot != null;
 
     // Elements we walked up from with Parent, so Child can walk back down the same way.
     private static readonly Stack<RectTransform> _descentTrail = new Stack<RectTransform>();
@@ -32,7 +39,8 @@ internal static class PickerController
 
     public static UiEditorHotkeys Hotkeys => _hotkeys;
 
-    public static PickedElement Selected => _selected != null && _selected.IsAlive ? _selected : null;
+    /// <summary>The selection; may be an element the game has since destroyed (see <see cref="PickedElement.IsAlive"/>).</summary>
+    public static PickedElement Selected => _selected;
     public static IReadOnlyList<PickedElement> Stack => _stack;
     public static int StackIndex => _stackIndex;
 
@@ -48,9 +56,22 @@ internal static class PickerController
 
         // Check Clear before Pick: they share a main key and differ only by modifier.
         if (_hotkeys.Clear.IsDown())
+        {
+            _appearedSnapshot = null;
             Clear();
+        }
         else if (_hotkeys.Pick.IsDown())
+        {
+            _appearedSnapshot = null;
             PickAt(input.mousePosition);
+        }
+        else if ((_hotkeys.PickAppeared.IsDown() || _hotkeys.PickAppearedShift.IsDown()) && !EditorWindow.IsTyping)
+        {
+            if (IsWaitingForAppeared)
+                PickAppeared(input.mousePosition);
+            else
+                _appearedSnapshot = ElementPicker.SnapshotVisible();
+        }
 
         // Navigation keys ([ ] PageUp/PageDown) are ordinary typing while a field has focus.
         if ((_stack.Count > 0 || _selected != null) && !EditorWindow.IsTyping)
@@ -67,8 +88,12 @@ internal static class PickerController
                 SelectChild();
         }
 
-        if (_selected != null && !_selected.IsAlive)
-            Clear();
+        // Keep a destroyed selection (a closed tooltip is still worth editing by path), but tell
+        // the window once so its list and header show it as closed.
+        var selectedAlive = _selected != null && _selected.IsAlive;
+        if (_selected != null && _selectedWasAlive && !selectedAlive)
+            SelectionChanged?.Invoke(_selected);
+        _selectedWasAlive = selectedAlive;
 
         RefreshOverlay();
 
@@ -114,12 +139,26 @@ internal static class PickerController
         return Mathf.Abs(delta.y) >= Mathf.Abs(delta.x) ? delta.y : delta.x;
     }
 
-    public static void PickAt(Vector2 screenPoint)
+    public static void PickAt(Vector2 screenPoint) =>
+        SetStack(ElementPicker.PickAt(screenPoint), $"at {screenPoint}");
+
+    /// <summary>Picks the elements that appeared or changed since the first press, or under the cursor if none did.</summary>
+    private static void PickAppeared(Vector2 screenPoint)
     {
-        _stack = ElementPicker.PickAt(screenPoint);
+        var appeared = ElementPicker.PickChangedSince(_appearedSnapshot);
+        _appearedSnapshot = null;
+        if (appeared.Count == 0)
+            PickAt(screenPoint);
+        else
+            SetStack(appeared, "that appeared or changed since the first press");
+    }
+
+    private static void SetStack(List<PickedElement> stack, string where)
+    {
+        _stack = stack;
         _descentTrail.Clear();
 
-        _logger?.LogInfo($"[UIEditor] Picked {_stack.Count} element(s) at {screenPoint}:");
+        _logger?.LogInfo($"[UIEditor] Picked {_stack.Count} element(s) {where}:");
         for (var i = 0; i < _stack.Count; i++)
             _logger?.LogInfo($"[UIEditor]   {i + 1}. {_stack[i].Path} {_stack[i].CapabilityTags}");
 
@@ -154,7 +193,7 @@ internal static class PickerController
 
     public static void SelectParent()
     {
-        var current = Selected?.RectTransform;
+        var current = Selected != null && Selected.IsAlive ? Selected.RectTransform : null;
         var parent = current == null ? null : UiCompat.As<RectTransform>(current.parent);
         if (parent == null || UiCompat.GetComponentInParent<Canvas>(parent) == null)
             return;
@@ -165,7 +204,7 @@ internal static class PickerController
 
     public static void SelectChild()
     {
-        var current = Selected?.RectTransform;
+        var current = Selected != null && Selected.IsAlive ? Selected.RectTransform : null;
         if (current == null)
             return;
 
@@ -207,12 +246,21 @@ internal static class PickerController
     private static void SetSelected(PickedElement element)
     {
         _selected = element;
+        _selectedWasAlive = element != null && element.IsAlive;
         _logOverlayState = true;
         SelectionChanged?.Invoke(element);
     }
 
     private static void RefreshOverlay()
     {
+        if (IsWaitingForAppeared)
+        {
+            // Status only: a highlight could sit over the popup being targeted.
+            HighlightOverlay.Show(null, $"Hover to open the tooltip or popup, then press {UiEditorHotkeys.Describe(_hotkeys.PickAppeared)} again   " +
+                                        $"({UiEditorHotkeys.Describe(_hotkeys.Clear)}: cancel)");
+            return;
+        }
+
         var selected = Selected;
         if (selected == null)
         {
@@ -221,6 +269,13 @@ internal static class PickerController
         }
 
         var position = _stackIndex >= 0 ? $"{_stackIndex + 1}/{_stack.Count}" : "–";
+        if (!selected.IsAlive)
+        {
+            HighlightOverlay.Show(null, $"[{position}] {selected}   closed by the game - edits still save, " +
+                                        $"reopen it to see them   ({UiEditorHotkeys.Describe(_hotkeys.Clear)}: clear)");
+            return;
+        }
+
         HighlightOverlay.Show(selected.RectTransform,
             $"[{position}] {selected}   {PickedElement.Truncate(selected.Path, 90)}   " +
             $"({CycleText()}: cycle, " +

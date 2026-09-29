@@ -84,11 +84,15 @@ internal sealed class TextTab : IEditorTab
     public void Build(UiPanel panel, PickedElement element, string rulePath)
     {
         _panel = panel;
+        var previous = _element;
         _element = element;
         var isTmp = element != null && (element.Capabilities & ElementCapabilities.TmpText) != 0;
         _showTmp = element == null || isTmp;
         _showLegacy = element == null || !isTmp;
-        _current = element != null ? ReadCurrentValues(isTmp) : default;
+        // One the game destroyed since (a closed tooltip) keeps the values read while it was alive.
+        _current = element == null ? default
+            : element.IsAlive ? ReadCurrentValues(isTmp)
+            : element.IsSameAs(previous) ? _current : default;
 
         // Exact match only - a wildcard resizer that merely happens to affect this element is
         // never loaded as the editable working copy, or Save would edit/rename the shared
@@ -267,9 +271,16 @@ internal sealed class TextTab : IEditorTab
             color = UiPanel.WarningColor;
         }
 
-        var infoWidth = isWildcard ? width - 150f : width;
+        var hasFallback = _savedPath == null && _matchingWildcard != null;
+        var infoWidth = isWildcard || hasFallback ? width - 150f : width;
         _panel.Label(info, 0, y, infoWidth, 34, 12, TextAnchor.UpperLeft, color);
-        if (isWildcard)
+        if (hasFallback)
+        {
+            var wildcardPath = _matchingWildcard.Path;
+            _panel.Button("Edit wildcard", width - 142, y, 142, RowHeight,
+                () => EditorWindow.OpenRuleForSelected(wildcardPath), UiPanel.MutedButtonColor);
+        }
+        else if (isWildcard)
         {
             _panel.Button("This element only", width - 142, y, 142, RowHeight, () =>
             {
