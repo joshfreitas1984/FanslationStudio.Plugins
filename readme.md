@@ -17,11 +17,18 @@ Every plugin's settings live in one file, `BepInEx/config/FanslationStudio.Plugi
 | `[Editor]` | `WindowScale`, `OpenOnPick`, `AutoSave` |
 | `[Hotkeys]` | See Hotkeys below |
 | `[Dumping]` | `ForeignLanguagePattern`, `Assemblies` (default `Assembly-CSharp*.dll`) |
+| `[Updates]` | `Enabled`, `PromptDelaySeconds` (default 15) |
 | `[TextResizer]` | `Enabled` |
 | `[DynamicStringPatcher]` | `Enabled`, `ResourcePath`, `FilePattern` (default `*dynamicStrings*`) |
 | `[PrefabTextReplacer]` | `Enabled`, `ResourcePath`, `FilePattern` (default `*prefabText*`) |
 
 > **Changed:** TextResizer, DynamicStringPatcher and PrefabTextReplacer used to have their own `.cfg` files. Those are no longer read - copy any values you changed into the sections above (`TextResizerEnabled` is now `[TextResizer] Enabled`).
+
+## Update prompt
+
+When the game starts the plugin checks GitHub for a newer patch release and, if one exists, shows a small "Update available" window (**Update now** / **Later**). Update now downloads the patch and the latest installer to a temp folder, closes the game, and the installer applies the update and restarts the game through Steam. If the check or download fails, the log says why and nothing else changes.
+
+There is nothing to configure per game. The repo, Steam app ID and zip name are read from `BepInEx/release-manifest.json`, which the installer writes when it applies a patch built by `FanslationStudio.LlmKit.Release`. A manual install without that manifest never prompts. Set `[Updates] Enabled = false` to turn it off. Wired into the BepInEx 5, BepInEx 6 Mono and BepInEx 6 IL2CPP hosts (Mono hosts tick from `Canvas.willRenderCanvases`, and force TLS 1.2 for old Unity runtimes).
 
 ## UI Editor
 
@@ -108,7 +115,7 @@ You can use * inside the path to indicate a wildcard (ie: match zero or more cha
 Path matching rules (shared by resizers, layouts and sprites):
 
 - The pattern must match the **whole** path. `Canvas/*/Title` will not match `Canvas/Panel/Title/Child`; add a trailing `*` (`Canvas/*/Title*`) if you want children too.
-- A leading `/` means "at any depth". `/Title/Text` matches any path ending in `Title/Text`, and `/*` matches everything (use it for a global resizer in a file that sorts last, e.g. `zzz.GlobalResizer.yaml`).
+- A leading `/` means "at any depth". `/Title/Text` matches any path ending in `Title/Text`, and `/*` matches everything (use it for a global resizer in a file that sorts last, e.g. `zzzGlobalResizer.yaml`).
 - Every other character is literal, so `[UI]`, `Text (TMP)` and `.` need no escaping.
 - When several wildcard entries match, the first one loaded wins (files load alphabetically).
 

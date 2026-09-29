@@ -2,7 +2,9 @@
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 #endif
+using FanslationStudio.Plugins.Support;
 using UnityEngine;
+using UnityEngine.EventSystems;
 
 namespace FanslationStudio.Plugins.UnityShared;
 
@@ -142,5 +144,20 @@ internal static class UiCompat
         rectTransform.GetWorldCorners(corners);
         return corners;
 #endif
+    }
+
+    /// <summary>
+    /// Makes sure an EventSystem exists so InputField focus and typing work. Only created if the game
+    /// has none; the objects are named with the editor prefix so pickers and appliers skip them.
+    /// </summary>
+    public static void EnsureEventSystem()
+    {
+        if (FindObjectOfType<EventSystem>() != null)
+            return;
+
+        var go = new GameObject(ObjectHelper.EditorObjectPrefix + "EventSystem");
+        Object.DontDestroyOnLoad(go);
+        AddComponent<EventSystem>(go);
+        AddComponent<StandaloneInputModule>(go);
     }
 }

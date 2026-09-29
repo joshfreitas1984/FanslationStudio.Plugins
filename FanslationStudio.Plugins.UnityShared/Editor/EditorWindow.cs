@@ -689,7 +689,7 @@ internal static class EditorWindow
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
         scaler.scaleFactor = _scale;
         UiCompat.AddComponent<GraphicRaycaster>(_root);
-        EnsureEventSystem();
+        UiCompat.EnsureEventSystem();
 
         var windowPanel = UiPanel.Create(UiCompat.GetRectTransform(_root), "Window", 0, 0, WindowWidth, WindowHeight,
             new Color(0.08f, 0.08f, 0.1f, 0.96f));
@@ -726,17 +726,5 @@ internal static class EditorWindow
 
         var statusPanel = UiPanel.Create(_window, "Status", Padding, WindowHeight - StatusHeight - 6f, WindowWidth - 2 * Padding, StatusHeight);
         _status = statusPanel.Label(string.Empty, 0, 0, WindowWidth - 2 * Padding, StatusHeight, 12, TextAnchor.MiddleLeft, UiPanel.DimTextColor);
-    }
-
-    private static void EnsureEventSystem()
-    {
-        if (UiCompat.FindObjectOfType<EventSystem>() != null)
-            return;
-
-        // Needed for InputField focus and typing. Only created if the game has none.
-        var go = new GameObject(ElementPicker.EditorObjectPrefix + "EventSystem");
-        Object.DontDestroyOnLoad(go);
-        UiCompat.AddComponent<EventSystem>(go);
-        UiCompat.AddComponent<StandaloneInputModule>(go);
     }
 }

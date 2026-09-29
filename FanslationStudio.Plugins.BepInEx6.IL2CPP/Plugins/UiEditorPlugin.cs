@@ -2,6 +2,7 @@ using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using FanslationStudio.Plugins.SharpYaml;
 using FanslationStudio.Plugins.UnityShared.Editor;
+using FanslationStudio.Plugins.UnityShared.Update;
 using HarmonyLib;
 using UnityEngine;
 
@@ -16,7 +17,12 @@ public class UiEditorPlugin : BasePlugin
     {
         UiEditorHost.Initialize(new BepInEx6Logger(base.Log), new YamlHelper(), Paths.BepInExRootPath,
             $"{MyPluginInfo.PLUGIN_GUID}.UIEditor", Paths.ManagedPath, Paths.GameDataPath, new Il2CppElementFinder());
-        if (!UiEditorHost.Enabled)
+
+        // Runs even when the UI Editor is disabled. Only pure .NET happens here (config, a file read and a
+        // background HTTP task); the prompt UI is built later, from the tick.
+        UpdateHost.Initialize(new BepInEx6Logger(base.Log), Paths.BepInExRootPath, Paths.GameRootPath);
+
+        if (!UiEditorHost.Enabled && !UpdateHost.Enabled)
             return;
 
         // Per-frame tick via a Time.deltaTime getter postfix - the only tick mechanism that is
@@ -35,5 +41,6 @@ public class UiEditorPlugin : BasePlugin
 
         _lastTickedFrame = frame;
         UiEditorHost.Tick();
+        UpdateHost.Tick();
     }
 }
