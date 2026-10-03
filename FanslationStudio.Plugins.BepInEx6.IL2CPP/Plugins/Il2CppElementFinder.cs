@@ -40,6 +40,22 @@ public class Il2CppElementFinder : IBehaviourAttacher, IPrefabTextFinder
         return metadata;
     }
 
+    public ITextMetadata TryGetTextMetadata(GameObject gameObject)
+    {
+        return _textMetadataByInstanceId.TryGetValue(gameObject.GetInstanceID(), out var metadata) ? metadata : null;
+    }
+
+    public ILegacyTextMetadata TryGetLegacyTextMetadata(GameObject gameObject)
+    {
+        return _legacyTextMetadataByInstanceId.TryGetValue(gameObject.GetInstanceID(), out var metadata) ? metadata : null;
+    }
+
+    // TryCast, not `as`: the Harmony postfix receives a wrapper typed as TMP_Text.
+    public TextMeshProUGUI AsTextMeshProUGUI(TMP_Text text)
+    {
+        return text == null ? null : text.TryCast<TextMeshProUGUI>();
+    }
+
     // UnityEngine.Object.FindObjectsOfType<T>() is generic, so like GetComponent<T>/
     // AddComponent<T> above, it must be called from code compiled directly in this host project
     // (against the real unhollowed assemblies) rather than from Shared, where it throws
@@ -76,6 +92,62 @@ public class Il2CppElementFinder : IBehaviourAttacher, IPrefabTextFinder
         return result;
     }
 
+    // The components with a serialized m_text/m_Text that prefab text is read from.
+    private static readonly System.Type[] TextComponentTypes =
+        [typeof(TMP_Text), typeof(Text), typeof(TMP_InputField), typeof(InputField)];
+
+    public Component[] FindAllTextComponentsInResources()
+    {
+        var result = new List<Component>();
+        foreach (var type in TextComponentTypes)
+            AddComponents(Resources.FindObjectsOfTypeAll(Il2CppType.From(type)), result);
+        return result.ToArray();
+    }
+
+    public Component[] GetTextComponentsInChildren(GameObject gameObject, bool includeInactive)
+    {
+        var result = new List<Component>();
+        foreach (var type in TextComponentTypes)
+        {
+            foreach (var component in gameObject.GetComponentsInChildren(Il2CppType.From(type), includeInactive))
+                AddComponent(component, result);
+        }
+        return result.ToArray();
+    }
+
+    private static void AddComponents(Il2CppReferenceArray<UnityEngine.Object> objects, List<Component> result)
+    {
+        foreach (var obj in objects)
+            AddComponent(obj, result);
+    }
+
+    // TryCast, not `as`: interop wrappers come back typed as the array's declared element type.
+    private static void AddComponent(UnityEngine.Object obj, List<Component> result)
+    {
+        var component = obj == null ? null : obj.TryCast<Component>();
+        if (component != null)
+            result.Add(component);
+    }
+
+    // TryCast, not `as`/`is`: the wrappers come back typed as Component.
+    public string GetText(Component component)
+    {
+        var tmp = component.TryCast<TMP_Text>();
+        if (tmp != null)
+            return tmp.text;
+
+        var legacy = component.TryCast<Text>();
+        if (legacy != null)
+            return legacy.text;
+
+        var tmpInput = component.TryCast<TMP_InputField>();
+        if (tmpInput != null)
+            return tmpInput.text;
+
+        var input = component.TryCast<InputField>();
+        return input != null ? input.text : null;
+    }
+
     // AssetBundle.LoadFromFile/GetAllAssetNames/LoadAsset/Unload are non-generic Unity API calls,
     // but must still be called from a host project rather than Shared (see IPrefabTextFinder).
     public GameObject[] LoadGameObjectsFromAssetBundle(string bundleFilePath)
@@ -87,9 +159,11 @@ public class Il2CppElementFinder : IBehaviourAttacher, IPrefabTextFinder
 
         try
         {
-            foreach (var assetName in bundle.GetAllAssetNames())
+            // Type-filtered, so the bundle's textures, audio etc. are never loaded just to be skipped.
+            foreach (var asset in bundle.LoadAllAssets(Il2CppType.From(typeof(GameObject))))
             {
-                if (bundle.LoadAsset(assetName) is GameObject gameObject)
+                var gameObject = asset == null ? null : asset.TryCast<GameObject>();
+                if (gameObject != null)
                     result.Add(gameObject);
             }
         }

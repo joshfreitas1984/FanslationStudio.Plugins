@@ -9,7 +9,7 @@ namespace FanslationStudio.Plugins.UnityShared.Editor.Ui;
 /// A rebuildable region of the editor window plus the widgets in it.
 ///
 /// Interaction is polled rather than event-driven: buttons are hit-tested against the mouse
-/// position and inputs are diffed against their last-seen text every frame. UnityEvent
+/// position and the focused input is diffed against its last-seen text every frame. UnityEvent
 /// listeners (Button.onClick, InputField.onValueChanged) are avoided on purpose - subscribing
 /// interop delegates is a crash risk under IL2CPP (see .github/copilot-instructions.md).
 ///
@@ -41,6 +41,15 @@ internal sealed class UiPanel
     private readonly List<Clickable> _clickables = new List<Clickable>();
     private readonly List<TrackedInput> _inputs = new List<TrackedInput>();
 
+    // Bumped by Clear, so callers and caches can tell a handler rebuilt the panel under them.
+    private int _version;
+    // The focused input, found once per frame (isFocused is an interop call per field).
+    private TrackedInput _focused;
+    private int _focusFrame = -1;
+    private int _focusVersion = -1;
+    // The input focused at the last poll, so its final text is read on the frame focus leaves it.
+    private TrackedInput _lastFocused;
+
     public RectTransform Rect { get; }
 
     private UiPanel(RectTransform rect)
@@ -71,33 +80,53 @@ internal sealed class UiPanel
     public float Width => Rect.rect.width;
 
     /// <summary>True while the user is typing in one of this panel's inputs.</summary>
-    public bool AnyInputFocused
+    public bool AnyInputFocused => FocusedInput() != null;
+
+    private TrackedInput FocusedInput()
     {
-        get
+        var frame = Time.frameCount;
+        if (frame == _focusFrame && _focusVersion == _version)
+            return _focused;
+
+        _focusFrame = frame;
+        _focusVersion = _version;
+        _focused = null;
+        for (var i = 0; i < _inputs.Count; i++)
         {
-            foreach (var input in _inputs)
+            var field = _inputs[i].Field;
+            if (field != null && field.isFocused)
             {
-                if (input.Field != null && input.Field.isFocused)
-                    return true;
+                _focused = _inputs[i];
+                break;
             }
-            return false;
         }
+        return _focused;
     }
 
     public void Clear()
     {
         for (var i = Rect.childCount - 1; i >= 0; i--)
-            UnityEngine.Object.Destroy(Rect.GetChild(i).gameObject);
+        {
+            // Destroy only takes effect at the end of the frame; deactivate first so the old
+            // widgets stop drawing (and dirtying the canvas batch) this frame.
+            var child = Rect.GetChild(i).gameObject;
+            child.SetActive(false);
+            UnityEngine.Object.Destroy(child);
+        }
         _clickables.Clear();
         _inputs.Clear();
+        _focused = null;
+        _lastFocused = null;
+        _version++;
     }
 
     /// <summary>Runs the click handler under the pointer, if any. Returns true if one ran.</summary>
     public bool HandleClick(Vector2 screenPoint)
     {
-        // Copy: a handler may rebuild this panel.
-        foreach (var clickable in _clickables.ToArray())
+        // Stops at the first handler, so a handler that rebuilds this panel is fine.
+        for (var i = 0; i < _clickables.Count; i++)
         {
+            var clickable = _clickables[i];
             if (clickable.Rect != null && clickable.Rect.gameObject.activeInHierarchy
                 && RectTransformUtility.RectangleContainsScreenPoint(clickable.Rect, screenPoint, null))
             {
@@ -113,20 +142,41 @@ internal sealed class UiPanel
         return RectTransformUtility.RectangleContainsScreenPoint(Rect, screenPoint, null);
     }
 
+    /// <summary>
+    /// Fires the change handler of the focused input, and of the one that just lost focus (so a
+    /// last keystroke, paste or Escape revert on the frame it was left is still seen). Only typing
+    /// changes a field and code-driven changes go through <see cref="SetInputText"/>, so the
+    /// unfocused fields' text (a string marshal each under IL2CPP) is never read.
+    /// </summary>
     public void PollInputs()
     {
-        foreach (var input in _inputs.ToArray())
+        var focused = FocusedInput();
+        var previous = _lastFocused;
+        _lastFocused = focused;
+
+        var version = _version;
+        if (previous != null && previous != focused)
         {
-            if (input.Field == null)
-                continue;
-
-            var text = input.Field.text;
-            if (text == input.LastText)
-                continue;
-
-            input.LastText = text;
-            input.OnChanged?.Invoke(text);
+            Poll(previous);
+            if (version != _version)
+                return; // the handler rebuilt the panel
         }
+
+        if (focused != null)
+            Poll(focused);
+    }
+
+    private static void Poll(TrackedInput input)
+    {
+        if (input.Field == null)
+            return;
+
+        var text = input.Field.text;
+        if (text == input.LastText)
+            return;
+
+        input.LastText = text;
+        input.OnChanged?.Invoke(text);
     }
 
     /// <summary>Sets an input's text without firing its change handler.</summary>
@@ -186,17 +236,35 @@ internal sealed class UiPanel
         return label;
     }
 
-    public RectTransform Button(string text, float x, float y, float width, float height, Action onClick, Color? color = null)
+    /// <summary>
+    /// A clickable button. The returned handle changes its label and colour in place, so toggles
+    /// don't have to rebuild the whole panel.
+    /// </summary>
+    public UiButton Button(string text, float x, float y, float width, float height, Action onClick, Color? color = null)
     {
         var go = new GameObject("Button");
         go.transform.SetParent(Rect, false);
         var image = UiCompat.AddComponent<Image>(go);
-        image.color = color ?? ButtonColor;
+        var buttonColor = color ?? ButtonColor;
+        image.color = buttonColor;
+        // Clicks are hit-tested geometrically (HandleClick), not raycast. The window background
+        // behind the button is still a raycast target, so clicks never reach the game.
+        image.raycastTarget = false;
         var rect = UiCompat.GetRectTransform(go);
         PlaceTopLeft(rect, x, y, width, height);
 
+        var button = new UiButton(rect, image, width, buttonColor);
+        button.SetText(text);
+
+        if (onClick != null)
+            _clickables.Add(new Clickable { Rect = rect, OnClick = onClick });
+        return button;
+    }
+
+    internal static Text CreateButtonLabel(RectTransform parent)
+    {
         var labelGo = new GameObject("Label");
-        labelGo.transform.SetParent(rect, false);
+        labelGo.transform.SetParent(parent, false);
         var label = UiCompat.AddComponent<Text>(labelGo);
         label.font = UiCompat.GetBuiltinFont();
         label.fontSize = 13;
@@ -205,20 +273,13 @@ internal sealed class UiPanel
         label.horizontalOverflow = HorizontalWrapMode.Overflow;
         label.verticalOverflow = VerticalWrapMode.Overflow;
         label.raycastTarget = false;
-        label.text = text;
 
-        // MiddleCenter doesn't reliably centre against a full-width rect on some hosts (labels
-        // hug the left edge), so size the label to its own text and centre that instead.
         var labelRect = UiCompat.GetRectTransform(labelGo);
         labelRect.anchorMin = new Vector2(0.5f, 0f);
         labelRect.anchorMax = new Vector2(0.5f, 1f);
         labelRect.pivot = new Vector2(0.5f, 0.5f);
-        labelRect.sizeDelta = new Vector2(Mathf.Min(label.preferredWidth + 8f, width), 0f);
         labelRect.anchoredPosition = Vector2.zero;
-
-        if (onClick != null)
-            _clickables.Add(new Clickable { Rect = rect, OnClick = onClick });
-        return rect;
+        return label;
     }
 
     public InputField Input(string text, float x, float y, float width, float height, Action<string> onChanged, string placeholder = null)
@@ -276,5 +337,62 @@ internal sealed class UiPanel
         rect.pivot = new Vector2(0f, 1f);
         rect.sizeDelta = new Vector2(width, height);
         rect.anchoredPosition = new Vector2(x, -y);
+    }
+}
+
+/// <summary>A button made by <see cref="UiPanel.Button"/>; its label and colour can change in place.</summary>
+internal sealed class UiButton
+{
+    private readonly float _width;
+    private Text _label;
+    private RectTransform _labelRect;
+    private string _text;
+    private Color _color;
+
+    public RectTransform Rect { get; }
+    public Image Image { get; }
+
+    internal UiButton(RectTransform rect, Image image, float width, Color color)
+    {
+        Rect = rect;
+        Image = image;
+        _width = width;
+        _color = color;
+    }
+
+    public void Set(string text, Color color)
+    {
+        SetText(text);
+        SetColor(color);
+    }
+
+    public void SetColor(Color color)
+    {
+        if (color == _color)
+            return;
+        _color = color;
+        Image.color = color;
+    }
+
+    public void SetText(string text)
+    {
+        text ??= string.Empty;
+        if (_text == text)
+            return;
+        _text = text;
+
+        // List rows are blank buttons with separate labels on top: no label object for those.
+        if (_label == null)
+        {
+            if (text.Length == 0)
+                return;
+            _label = UiPanel.CreateButtonLabel(Rect);
+            _labelRect = UiCompat.GetRectTransform(_label);
+        }
+
+        _label.text = text;
+        // MiddleCenter doesn't reliably centre against a full-width rect on some hosts (labels
+        // hug the left edge), so size the label to its own text and centre that instead.
+        _labelRect.sizeDelta = new Vector2(text.Length == 0 ? 0f : Mathf.Min(_label.preferredWidth + 8f, _width), 0f);
     }
 }

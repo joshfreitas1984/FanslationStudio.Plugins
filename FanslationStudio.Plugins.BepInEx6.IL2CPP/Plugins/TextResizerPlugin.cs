@@ -1,12 +1,12 @@
-using BepInEx;
+﻿using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.SharpYaml;
 using FanslationStudio.Plugins.TextResizer;
-using HarmonyLib;
 using System;
 using System.Reflection;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using FanslationStudio.Plugins.UnityShared;
 
 namespace FanslationStudio.Plugins.Plugins;
@@ -43,10 +43,9 @@ public class TextResizerPlugin : BasePlugin
         // patching a concrete, non-generic engine method avoids that code path entirely - it
         // only needs ordinary MethodInfo resolution + an IL detour, no generic instantiation.
         // UnityEngine.Time.deltaTime is read by virtually all game code every frame, so patching
-        // its getter gives us a safe once-per-frame tick without any generic interop call.
-        var harmony = new Harmony($"{MyPluginInfo.PLUGIN_GUID}.TextResizer");
-        var deltaTimeGetter = AccessTools.PropertyGetter(typeof(Time), nameof(Time.deltaTime));
-        harmony.Patch(deltaTimeGetter, postfix: new HarmonyMethod(typeof(TextResizerPlugin), nameof(OnDeltaTimeRead)));
+        // its getter gives us a safe once-per-frame tick without any generic interop call. The
+        // patch is shared with the other plugins (Il2CppFrameTick) so it runs once per read.
+        Il2CppFrameTick.Register($"{MyPluginInfo.PLUGIN_GUID}.TextResizer", RunUpdate);
 
         // Diagnostic only: pure .NET reflection over the *actually loaded* runtime types (no
         // Il2Cpp interop invocation at all, so this is always safe) to find out what API surface
@@ -75,19 +74,6 @@ public class TextResizerPlugin : BasePlugin
         }
     }
 
-    private static int _lastTickedFrame = -1;
-
-    private static void OnDeltaTimeRead()
-    {
-        // Time.deltaTime can be read many times per frame - only tick once per frame.
-        var frame = Time.frameCount;
-        if (frame == _lastTickedFrame)
-            return;
-
-        _lastTickedFrame = frame;
-        RunUpdate();
-    }
-
     internal static void RunUpdate()
     {
         try
@@ -100,7 +86,8 @@ public class TextResizerPlugin : BasePlugin
             // TextMetadataComponents.cs/Il2CppElementFinder.cs. No registration step is needed.
             _service.EnsurePatched();
             TextResizerGameObjectPatches.EnsurePatched();
-            _service.CheckForSceneChange();
+            // Read here, not in Shared: this host compiles against the real UnityEngine.
+            _service.CheckForSceneChange(SceneManager.GetActiveScene().handle);
         }
         catch (Exception ex)
         {

@@ -28,6 +28,66 @@ internal static class SettingsView
 
     private static int _page;
 
+    // ConfigFile.SaveOnConfigSet rewrites the whole .cfg on every set, i.e. on every valid
+    // keystroke here. While the view is open, changes apply in memory (SettingChanged still
+    // fires) and the file is written once typing pauses, and again when the view closes.
+    private const float SaveDelaySeconds = 1f;
+    private static bool _editing;
+    private static bool _saveOnConfigSet;
+    private static bool _changed;
+    private static float _lastChangeTime;
+
+    /// <summary>Call when the view opens; pair with <see cref="EndEditing"/>.</summary>
+    public static void BeginEditing()
+    {
+        if (_editing)
+            return;
+
+        var config = PluginConfig.File;
+        _editing = true;
+        _changed = false;
+        _saveOnConfigSet = config.SaveOnConfigSet;
+        config.SaveOnConfigSet = false;
+    }
+
+    /// <summary>Call when the view closes: writes the file if anything changed.</summary>
+    public static void EndEditing()
+    {
+        if (!_editing)
+            return;
+
+        var config = PluginConfig.File;
+        _editing = false;
+        config.SaveOnConfigSet = _saveOnConfigSet;
+        if (!_changed)
+            return;
+
+        SaveNow();
+    }
+
+    /// <summary>Call every frame while the view is open: saves a second after the last change,
+    /// so edits survive the game being closed with the view still open.</summary>
+    public static void Tick()
+    {
+        if (_editing && _changed && Time.realtimeSinceStartup - _lastChangeTime >= SaveDelaySeconds)
+            SaveNow();
+    }
+
+    private static void SaveNow()
+    {
+        var config = PluginConfig.File;
+        _changed = false;
+        try
+        {
+            config.Save();
+            EditorWindow.SetStatus($"Saved settings to {Path.GetFileName(config.ConfigFilePath)}.");
+        }
+        catch (Exception ex)
+        {
+            EditorWindow.SetStatus($"Could not save settings: {ex.Message}", true);
+        }
+    }
+
     /// <summary>Builds the view into an empty panel.</summary>
     public static void Build(UiPanel panel, Action close)
     {
@@ -37,7 +97,7 @@ internal static class SettingsView
         panel.Label("Plugin settings", 0, 0, 300, 24, 14, TextAnchor.MiddleLeft, null, FontStyle.Bold);
         panel.Button("Dump strings", width - 214, 0, 120, 24, UiEditorHost.DumpStrings, UiPanel.ButtonColor);
         panel.Button("Close", width - 88, 0, 88, 24, close, UiPanel.MutedButtonColor);
-        panel.Label($"Saved to {Path.GetFileName(config.ConfigFilePath)} as you type. " +
+        panel.Label($"Saved to {Path.GetFileName(config.ConfigFilePath)} as you edit. " +
                     "Most changes take effect after restarting the game.",
             0, 28, width, 22, 12, TextAnchor.MiddleLeft, UiPanel.DimTextColor);
 
@@ -82,11 +142,13 @@ internal static class SettingsView
         if (entry.SettingType == typeof(bool))
         {
             var on = (bool)entry.BoxedValue;
-            panel.Button(on ? "On" : "Off", controlX, y + 4, 80, 24, () =>
+            UiButton button = null;
+            button = panel.Button(on ? "On" : "Off", controlX, y + 4, 80, 24, () =>
             {
-                entry.BoxedValue = !on;
+                var value = !(bool)entry.BoxedValue;
+                entry.BoxedValue = value;
                 Saved(entry);
-                Rebuild(panel, close);
+                button.Set(value ? "On" : "Off", value ? UiPanel.SelectedColor : UiPanel.MutedButtonColor);
             }, on ? UiPanel.SelectedColor : UiPanel.MutedButtonColor);
         }
         else
@@ -150,8 +212,16 @@ internal static class SettingsView
         return true;
     }
 
-    private static void Saved(ConfigEntryBase entry) =>
-        EditorWindow.SetStatus($"Saved {entry.Definition.Section} / {entry.Definition.Key}.");
+    private static void Saved(ConfigEntryBase entry)
+    {
+        // Outside BeginEditing/EndEditing SaveOnConfigSet is untouched, so the set already saved.
+        if (_editing)
+        {
+            _changed = true;
+            _lastChangeTime = Time.realtimeSinceStartup;
+        }
+        EditorWindow.SetStatus($"Set {entry.Definition.Section} / {entry.Definition.Key}.");
+    }
 
     /// <summary>Splits the entries, grouped by section in the order they were bound, into pages
     /// that fit the given height (a section header is repeated when it spans pages).</summary>

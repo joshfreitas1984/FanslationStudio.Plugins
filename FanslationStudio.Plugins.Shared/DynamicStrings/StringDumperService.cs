@@ -19,6 +19,17 @@ public class StringDumperService
     public static string ManagedPath;
     public static string[] AssemblyPatterns;
 
+    // Built once: the static Regex.IsMatch(string, string) overload re-parses the pattern
+    // whenever it falls out of Regex's small static cache.
+    private static Regex _matchRegex;
+
+    // Fragments of a called method's full name that mark the string as debug/logging output.
+    private static readonly string[] DebugMethodFragments = [
+        "Debug", ".Log",
+        "ContainsKey", "LitJson", "onError",
+        "CustomData", "GetIconSprite"
+    ];
+
     /// <param name="assemblyPatterns">
     /// File globs (relative to <paramref name="managedPath"/>) for the assemblies to scan, separated by ';'.
     /// Games often split their code out of Assembly-CSharp.dll, e.g. "Assembly-CSharp.dll;Mortal.*.dll".
@@ -27,6 +38,7 @@ public class StringDumperService
     {
         Logger = logger;
         RegexPattern = regexPattern;
+        _matchRegex = DynamicStringSupport.CreateMatchRegex(regexPattern);
         ManagedPath = managedPath;
         AssemblyPatterns = (assemblyPatterns ?? DefaultAssemblyPatterns)
             .Split([';'], StringSplitOptions.RemoveEmptyEntries)
@@ -121,9 +133,10 @@ public class StringDumperService
 
     private void ProcessType(TypeDefinition type, List<DynamicStringContract> stringReferences, int recursionLevel = 0)
     {
-        // Process nested types
-        foreach (var nestedType in type.NestedTypes)
-            if (!stringReferences.Any(r => r.Type == nestedType.ToString()) && recursionLevel < 15) //15 should be fine
+        // Process nested types. Each is only reachable through its declaring type, so it's
+        // visited exactly once.
+        if (recursionLevel < 15) //15 should be fine
+            foreach (var nestedType in type.NestedTypes)
                 ProcessType(nestedType, stringReferences, recursionLevel + 1);
 
         // Process methods
@@ -151,7 +164,7 @@ public class StringDumperService
 
                 // Look for string load operations
                 if (!string.IsNullOrWhiteSpace(operandValue)
-                    && Regex.IsMatch(operandValue, RegexPattern))
+                    && _matchRegex.IsMatch(operandValue))
                 {
                     // Skip Debug lines
                     if (IsLikelyDebug(instruction, operandValue))
@@ -173,12 +186,6 @@ public class StringDumperService
 
     public static bool IsLikelyDebug(Mono.Cecil.Cil.Instruction currentInstruction, string currentString)
     {
-        string[] methodContains = [
-            "Debug", ".Log",
-            "ContainsKey", "LitJson", "onError",
-            "CustomData", "GetIconSprite"
-        ];
-
         int instructionCheck = 0;
         var nextInstruction = currentInstruction;
 
@@ -213,10 +220,13 @@ public class StringDumperService
                 {
                     //Logger.LogError($"Ref {instructionCheck}: {methodRef.FullName}");
 
-                    if (methodRef.FullName.StartsWith("Log"))
+                    // Cecil rebuilds FullName on every access, so read it once.
+                    var fullName = methodRef.FullName;
+
+                    if (fullName.StartsWith("Log", StringComparison.Ordinal))
                         return true;
 
-                    if (methodContains.Any(phrase => methodRef.FullName.IndexOf(phrase) >= 0))
+                    if (ContainsAny(fullName, DebugMethodFragments))
                     {
                         //if (!UnsafeFunctions.Contains(methodRef.FullName))
                         //    UnsafeFunctions.Add(methodRef.FullName);
@@ -249,6 +259,14 @@ public class StringDumperService
             instructionCheck++;
         }
 
+        return false;
+    }
+
+    private static bool ContainsAny(string value, string[] fragments)
+    {
+        foreach (var fragment in fragments)
+            if (value.IndexOf(fragment, StringComparison.Ordinal) >= 0)
+                return true;
         return false;
     }
 

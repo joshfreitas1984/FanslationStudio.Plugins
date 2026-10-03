@@ -73,16 +73,17 @@ public class DefaultExcludingTypeInspector : TypeInspectorSkeleton
             try
             {
                 if (!type.IsAbstract && !type.IsInterface && HasDefaultConstructor(type))
-                {
                     defaultInstance = Activator.CreateInstance(type);
-                    _defaultInstances[type] = defaultInstance!;
-                }
             }
             catch
             {
                 // If we can't create a default instance, just pass through all properties
-                return properties;
+                defaultInstance = null;
             }
+
+            // Null is cached too, so types without a usable default constructor aren't re-checked
+            // on every object serialized.
+            _defaultInstances[type] = defaultInstance!;
         }
 
         if (defaultInstance == null)

@@ -172,4 +172,48 @@ public class ContractRepositoryTests
 
         Assert.Equal(["Canvas/A"], repo.All.Select(c => c.Path));
     }
+
+    [Fact]
+    public void FindCandidates_ExactFirst_ThenWildcardsInLoadOrder()
+    {
+        var (repo, _) = Create(
+            ("a.yaml", [new() { Path = "/Name", RotationZ = 1 }, new() { Path = "Canvas/Card/Name", RotationZ = 2 }]),
+            ("b.yaml", [new() { Path = "Canvas/*", RotationZ = 3 }]));
+
+        Assert.Equal([2f, 1f, 3f], repo.FindCandidates("Canvas/Card/Name").Select(c => c.RotationZ));
+        Assert.Empty(repo.FindCandidates("Other/Card/Title"));
+    }
+
+    [Fact]
+    public void CouldMatchName_UsesLeafNames_UnlessAnyLeafIsWildcard()
+    {
+        var (repo, _) = Create(("a.yaml", [new() { Path = "Canvas/*/Name" }, new() { Path = "/Title/Text" }]));
+
+        Assert.True(repo.CouldMatchName("Name"));
+        Assert.True(repo.CouldMatchName("Text"));
+        Assert.False(repo.CouldMatchName("Title"));
+        // "Canvas/Card/Item/Name" can also be an object named "Item/Name" under Canvas/Card.
+        Assert.True(repo.CouldMatchName("Item/Name"));
+
+        repo.Preview(new LayoutContract { Path = "Canvas/List/*" });
+        Assert.True(repo.CouldMatchName("Anything"));
+
+        repo.DiscardPreview("Canvas/List/*");
+        Assert.False(repo.CouldMatchName("Anything"));
+    }
+
+    [Fact]
+    public void Index_TracksSaveAndDelete()
+    {
+        var (repo, _) = Create(("a.yaml", [new() { Path = "Canvas/A" }]));
+        Assert.Null(repo.Find("Canvas/B"));
+
+        repo.Save(new LayoutContract { Path = "Canvas/B" });
+        Assert.NotNull(repo.Find("Canvas/B"));
+        Assert.True(repo.CouldMatchName("B"));
+
+        repo.Delete("Canvas/B");
+        Assert.Null(repo.Find("Canvas/B"));
+        Assert.False(repo.CouldMatchName("B"));
+    }
 }

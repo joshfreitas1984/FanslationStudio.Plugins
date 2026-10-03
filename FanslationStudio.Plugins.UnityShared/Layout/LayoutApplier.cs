@@ -71,17 +71,65 @@ internal static class LayoutApplier
         public float? LayoutGroupSpacing;
 
         /// <summary>Children this rule's counterRotateChildren last force-rotated, by instance ID -
-        /// released (rotation restored) whenever that set changes or the rule stops applying.</summary>
+        /// released (rotation restored) when they drop out of that set or the rule stops applying.</summary>
         public HashSet<int> CounterRotatedChildIds;
+        public bool CounterRotateSwapped;
+
+        /// <summary>True while this state is in <see cref="_enforced"/>.</summary>
+        public bool Enforced;
+
+        // Components looked up once (GetComponent is an interop call under IL2CPP); looked up
+        // again only while missing, so one destroyed or added later is still found.
+        public Image Image;
+        public ContentSizeFitter Fitter;
+        public LayoutGroup Group;
+        public HorizontalOrVerticalLayoutGroup HorizontalOrVerticalGroup;
+
+        // copyRectFrom / placeBefore targets, resolved once per rule and re-resolved if the rule,
+        // our parent or the target itself changes.
+        public LayoutContract CopySourceFor, PlaceTargetFor;
+        public Transform CopySourceParent, PlaceTargetParent;
+        public RectTransform CopySource;
+        public Transform PlaceTarget;
     }
 
     private static ContractRepository<LayoutContract> _repository;
     private static IPluginLogger _logger;
 
     private static readonly Dictionary<int, ElementState> _states = new Dictionary<int, ElementState>();
+    // States whose rule has enforce: true, re-applied every tick without scanning _states.
+    private static readonly List<ElementState> _enforced = new List<ElementState>();
+    private static readonly List<ElementState> _enforcedBuffer = new List<ElementState>();
     private static readonly HashSet<int> _appliedThisTick = new HashSet<int>();
     private static readonly Dictionary<int, KeyValuePair<GameObject, bool>> _pendingActive = new Dictionary<int, KeyValuePair<GameObject, bool>>();
+    private static readonly List<KeyValuePair<GameObject, bool>> _pendingBuffer = new List<KeyValuePair<GameObject, bool>>();
     private static readonly HashSet<string> _warned = new HashSet<string>();
+    // ContentSizeFitter.FitMode by rule text; -1 = not a valid mode.
+    private static readonly Dictionary<string, int> _fitModes = new Dictionary<string, int>(StringComparer.Ordinal);
+
+    // Reused by the hot hook paths (never re-entered: Apply sets _applying, which they check).
+    private static readonly List<Transform> _chain = new List<Transform>(16);
+    private static readonly List<string> _chainNames = new List<string>(16);
+
+    // Elements enabled inside a hierarchy just instantiated at the scene root (root named
+    // "...(Clone)"). Games commonly move and rename it straight after - e.g. Instantiate(prefab),
+    // SetParent(PopRoot), name = "CreateMenu" - with no further signal, so the paths seen when
+    // they were enabled match the wrong rules (or none). Checked again on the next tick.
+    private const string CloneSuffix = "(Clone)";
+    private const int MaxPendingCloneChecks = 20000;
+    private static readonly Dictionary<int, Transform> _pendingCloneChecks = new Dictionary<int, Transform>();
+    private static readonly List<Transform> _cloneCheckBuffer = new List<Transform>();
+    private static bool _flushingCloneChecks;
+    private static readonly StringBuilder _pathBuilder = new StringBuilder(128);
+    private static HashSet<int> _counterRotateScratch = new HashSet<int>();
+    private static readonly List<int> _deadIds = new List<int>();
+    private static readonly char[] PathSeparator = { '/' };
+
+    // Destroyed elements' states are pruned this often, or sooner once _states doubles.
+    private const int PruneIntervalFrames = 300;
+    private const int MinPruneCount = 256;
+    private static int _framesSincePrune;
+    private static int _countAfterPrune;
 
     private static bool _applying;
     private static int _lastSceneHandle;
@@ -131,13 +179,35 @@ internal static class LayoutApplier
             PruneDestroyed();
             ReapplyAll();
         }
+        else if (++_framesSincePrune >= PruneIntervalFrames || _states.Count >= Math.Max(MinPruneCount, 2 * _countAfterPrune))
+        {
+            // Recycled/instantiated rows leave states behind for objects that are later destroyed.
+            PruneDestroyed();
+        }
 
         FlushPendingActive();
+        FlushCloneChecks();
 
-        foreach (var state in new List<ElementState>(_states.Values))
+        if (_enforced.Count > 0)
         {
-            if (state.Applied != null && state.Applied.IsEnforced() && state.Rect != null)
-                Apply(state.Rect, state.Applied, state.Path);
+            // Copied: Apply can revert (and so unlist) a state whose rule was disabled.
+            _enforcedBuffer.AddRange(_enforced);
+            try
+            {
+                foreach (var state in _enforcedBuffer)
+                {
+                    if (state.Rect == null || state.Applied == null || !state.Applied.IsEnforced())
+                    {
+                        SetEnforced(state, false);
+                        continue;
+                    }
+                    Apply(state.Rect, state.Applied, state.Path);
+                }
+            }
+            finally
+            {
+                _enforcedBuffer.Clear();
+            }
         }
 
         _appliedThisTick.Clear();
@@ -162,11 +232,12 @@ internal static class LayoutApplier
 
         foreach (var rect in UiCompat.FindObjectsOfType<RectTransform>())
         {
-            if (rect == null)
+            // Most elements' own names can't match any rule; skip building their paths.
+            if (rect == null || !_repository.CouldMatchName(rect.name))
                 continue;
 
             var path = ObjectHelper.GetGameObjectPath(rect.gameObject);
-            if (path.StartsWith(ElementPicker.EditorObjectPrefix))
+            if (ObjectHelper.IsEditorObjectPath(path))
                 continue;
 
             var contract = _repository.Find(path);
@@ -179,35 +250,63 @@ internal static class LayoutApplier
     /// Called when an element becomes active. Applies rules to it and to any ancestors with rules
     /// (containers with no Graphic never get an OnEnable of their own). Each element is applied at
     /// most once per tick, however many of its children appear.
+    ///
+    /// Runs inside very hot engine hooks, so the chain is walked once collecting names, and a
+    /// level's path is only built when its name could match a rule. The whole chain is walked
+    /// every time (names are cheap): an ancestor may have been renamed or reparented since an
+    /// earlier event this frame, e.g. a row instantiated, renamed, then given its text.
     /// </summary>
     public static void OnElementEnabled(Transform transform)
     {
         if (_applying || !HasRules || transform == null)
             return;
 
-        var chain = new List<Transform>();
-        for (var current = transform; current != null; current = current.parent)
-            chain.Add(current);
-        chain.Reverse();
-
-        if (chain[0].name.StartsWith(ElementPicker.EditorObjectPrefix))
-            return;
-
-        var path = new StringBuilder();
-        foreach (var level in chain)
+        var chain = _chain;
+        var names = _chainNames;
+        try
         {
-            if (path.Length > 0)
-                path.Append('/');
-            path.Append(level.name);
+            var anyCandidate = false;
+            for (var current = transform; current != null; current = current.parent)
+            {
+                var name = current.name;
+                chain.Add(current);
+                names.Add(name);
+                anyCandidate |= _repository.CouldMatchName(name);
+            }
 
-            var levelPath = path.ToString();
-            var contract = _repository.Find(levelPath);
-            if (contract == null)
-                continue;
+            // Queued whatever its current names: they may only match once moved and renamed.
+            if (!_flushingCloneChecks && _pendingCloneChecks.Count < MaxPendingCloneChecks
+                && names[names.Count - 1].EndsWith(CloneSuffix, StringComparison.Ordinal))
+                _pendingCloneChecks[transform.GetInstanceID()] = transform;
 
-            var rect = UiCompat.As<RectTransform>(level);
-            if (rect != null && _appliedThisTick.Add(rect.GetInstanceID()))
-                Apply(rect, contract, levelPath);
+            if (!anyCandidate || ObjectHelper.IsEditorObjectPath(names[names.Count - 1]))
+                return;
+
+            var builder = _pathBuilder;
+            builder.Length = 0;
+            for (var i = chain.Count - 1; i >= 0; i--)
+            {
+                if (builder.Length > 0)
+                    builder.Append('/');
+                builder.Append(names[i]);
+
+                if (!_repository.CouldMatchName(names[i]))
+                    continue;
+
+                var levelPath = builder.ToString();
+                var contract = _repository.Find(levelPath);
+                if (contract == null)
+                    continue;
+
+                var rect = UiCompat.As<RectTransform>(chain[i]);
+                if (rect != null && _appliedThisTick.Add(rect.GetInstanceID()))
+                    Apply(rect, contract, levelPath);
+            }
+        }
+        finally
+        {
+            chain.Clear();
+            names.Clear();
         }
     }
 
@@ -217,7 +316,9 @@ internal static class LayoutApplier
     /// this way - one child's Image/Text is rebound with no OnEnable or SetActive anywhere in the
     /// row - so a sibling with no signal of its own (a static background behind the label, say)
     /// would otherwise never see its rule reapplied. Checks the ancestor chain as
-    /// <see cref="OnElementEnabled"/> does, then its immediate siblings too.
+    /// <see cref="OnElementEnabled"/> does, then its immediate siblings too. Siblings are
+    /// re-applied on every refresh, not once per tick: the game's bind code may have moved them
+    /// after an earlier apply this frame (Apply only writes values that differ).
     /// </summary>
     public static void OnElementRefreshed(Transform transform)
     {
@@ -227,23 +328,35 @@ internal static class LayoutApplier
         OnElementEnabled(transform);
 
         var parent = transform.parent;
-        if (parent == null || transform.root.name.StartsWith(ElementPicker.EditorObjectPrefix))
+        if (parent == null)
             return;
 
-        var parentPath = ObjectHelper.GetGameObjectPath(parent.gameObject);
+        // The parent's path is only built once some sibling's name could match a rule.
+        string parentPath = null;
         for (var i = 0; i < parent.childCount; i++)
         {
             var child = parent.GetChild(i);
             if (child == transform)
                 continue;
 
-            var sibling = UiCompat.As<RectTransform>(child);
-            if (sibling == null)
+            var name = child.name;
+            if (!_repository.CouldMatchName(name))
                 continue;
 
-            var path = parentPath + "/" + sibling.name;
+            if (parentPath == null)
+            {
+                parentPath = ObjectHelper.GetGameObjectPath(parent.gameObject);
+                if (ObjectHelper.IsEditorObjectPath(parentPath))
+                    return;
+            }
+
+            var path = parentPath + "/" + name;
             var contract = _repository.Find(path);
-            if (contract != null)
+            if (contract == null)
+                continue;
+
+            var sibling = UiCompat.As<RectTransform>(child);
+            if (sibling != null)
                 Apply(sibling, contract, path);
         }
     }
@@ -313,7 +426,8 @@ internal static class LayoutApplier
         {
             foreach (var rect in UiCompat.FindObjectsOfType<RectTransform>())
             {
-                if (rect == null || IsApplied(rect))
+                // A name no rule can match would find no contract below anyway.
+                if (rect == null || IsApplied(rect) || !_repository.CouldMatchName(rect.name))
                     continue;
                 var path = ObjectHelper.GetGameObjectPath(rect.gameObject);
                 if (!Matches(path))
@@ -365,6 +479,7 @@ internal static class LayoutApplier
             }
 
             state.Applied = contract;
+            SetEnforced(state, contract.IsEnforced());
         }
         catch (Exception ex)
         {
@@ -376,6 +491,8 @@ internal static class LayoutApplier
         }
     }
 
+    // Every write below is skipped when the value is already right: enforced rules re-apply every
+    // tick, and any RectTransform/layout write dirties the canvas (a rebuild) even if unchanged.
     private static void ApplyRectTransform(ElementState state, LayoutContract contract)
     {
         var rect = state.Rect;
@@ -389,7 +506,7 @@ internal static class LayoutApplier
 
         if (!string.IsNullOrEmpty(contract.CopyRectFrom))
         {
-            var source = UiCompat.As<RectTransform>(ResolveRelative(rect, contract.CopyRectFrom));
+            var source = ResolveCopySource(state, contract);
             if (source == null)
             {
                 WarnOnce($"copy:{contract.Path}", $"[UIEditor] copyRectFrom '{contract.CopyRectFrom}' not found from '{state.Path}'.");
@@ -410,64 +527,70 @@ internal static class LayoutApplier
         }
 
         // Anchors and pivot first: anchoredPosition and sizeDelta are relative to them.
-        var newAnchorMin = Vector(contract.AnchorMin, 2, contract, nameof(contract.AnchorMin));
-        if (newAnchorMin != null || copied)
+        var hasAnchorMin = TryVector2(contract.AnchorMin, contract, nameof(contract.AnchorMin), out var newAnchorMin);
+        if (hasAnchorMin || copied)
         {
-            rect.anchorMin = newAnchorMin != null ? ToVector2(newAnchorMin) : anchorMin;
+            var value = hasAnchorMin ? newAnchorMin : anchorMin;
+            if (!Same(rect.anchorMin, value))
+                rect.anchorMin = value;
             state.Touched |= Touched.AnchorMin;
         }
 
-        var newAnchorMax = Vector(contract.AnchorMax, 2, contract, nameof(contract.AnchorMax));
-        if (newAnchorMax != null || copied)
+        var hasAnchorMax = TryVector2(contract.AnchorMax, contract, nameof(contract.AnchorMax), out var newAnchorMax);
+        if (hasAnchorMax || copied)
         {
-            rect.anchorMax = newAnchorMax != null ? ToVector2(newAnchorMax) : anchorMax;
+            var value = hasAnchorMax ? newAnchorMax : anchorMax;
+            if (!Same(rect.anchorMax, value))
+                rect.anchorMax = value;
             state.Touched |= Touched.AnchorMax;
         }
 
-        var newPivot = Vector(contract.Pivot, 2, contract, nameof(contract.Pivot));
-        if (newPivot != null || copied)
+        var hasPivot = TryVector2(contract.Pivot, contract, nameof(contract.Pivot), out var newPivot);
+        if (hasPivot || copied)
         {
-            rect.pivot = newPivot != null ? ToVector2(newPivot) : pivot;
+            var value = hasPivot ? newPivot : pivot;
+            if (!Same(rect.pivot, value))
+                rect.pivot = value;
             state.Touched |= Touched.Pivot;
         }
 
-        var size = LayoutMath.Resolve(
-            Vector(contract.SizeDelta, 2, contract, nameof(contract.SizeDelta)),
-            Vector(contract.OffsetSize, 2, contract, nameof(contract.OffsetSize)),
-            ToArray(baseSize));
-        if (size != null || copiedSize)
+        var hasSize = Resolve(contract.SizeDelta, contract.OffsetSize, baseSize, contract,
+            nameof(contract.SizeDelta), nameof(contract.OffsetSize), out var size);
+        if (hasSize || copiedSize)
         {
-            rect.sizeDelta = size != null ? ToVector2(size) : baseSize;
+            var value = hasSize ? size : baseSize;
+            if (!Same(rect.sizeDelta, value))
+                rect.sizeDelta = value;
             state.Touched |= Touched.SizeDelta;
         }
 
-        var position = LayoutMath.Resolve(
-            Vector(contract.AnchoredPosition, 2, contract, nameof(contract.AnchoredPosition)),
-            Vector(contract.OffsetPosition, 2, contract, nameof(contract.OffsetPosition)),
-            ToArray(basePosition));
-        if (position != null || copied)
+        var hasPosition = Resolve(contract.AnchoredPosition, contract.OffsetPosition, basePosition, contract,
+            nameof(contract.AnchoredPosition), nameof(contract.OffsetPosition), out var position);
+        if (hasPosition || copied)
         {
-            rect.anchoredPosition = position != null ? ToVector2(position) : basePosition;
+            var value = hasPosition ? position : basePosition;
+            if (!Same(rect.anchoredPosition, value))
+                rect.anchoredPosition = value;
             state.Touched |= Touched.AnchoredPosition;
         }
 
-        var localPosition = Vector(contract.LocalPosition, 3, contract, nameof(contract.LocalPosition));
-        if (localPosition != null)
+        if (TryVector3(contract.LocalPosition, contract, nameof(contract.LocalPosition), out var localPosition))
         {
-            rect.localPosition = ToVector3(localPosition);
+            if (!Same(rect.localPosition, localPosition))
+                rect.localPosition = localPosition;
             state.Touched |= Touched.LocalPosition;
         }
 
-        var localScale = Vector(contract.LocalScale, 3, contract, nameof(contract.LocalScale));
-        if (localScale != null)
+        if (TryVector3(contract.LocalScale, contract, nameof(contract.LocalScale), out var localScale))
         {
-            rect.localScale = ToVector3(localScale);
+            if (!Same(rect.localScale, localScale))
+                rect.localScale = localScale;
             state.Touched |= Touched.LocalScale;
         }
 
         if (contract.RotationZ.HasValue)
         {
-            rect.localEulerAngles = new Vector3(state.LocalEuler.x, state.LocalEuler.y, contract.RotationZ.Value);
+            SetLocalEuler(rect, new Vector3(state.LocalEuler.x, state.LocalEuler.y, contract.RotationZ.Value));
             state.Touched |= Touched.Rotation;
         }
     }
@@ -476,52 +599,58 @@ internal static class LayoutApplier
     {
         if (contract.ImageEnabled.HasValue || contract.PreserveAspect.HasValue)
         {
-            var image = UiCompat.GetComponent<Image>(state.Rect);
+            var image = GetImage(state);
             if (image != null && contract.ImageEnabled.HasValue)
             {
-                image.enabled = contract.ImageEnabled.Value;
+                if (image.enabled != contract.ImageEnabled.Value)
+                    image.enabled = contract.ImageEnabled.Value;
                 state.Touched |= Touched.ImageEnabled;
             }
             if (image != null && contract.PreserveAspect.HasValue)
             {
-                image.preserveAspect = contract.PreserveAspect.Value;
+                if (image.preserveAspect != contract.PreserveAspect.Value)
+                    image.preserveAspect = contract.PreserveAspect.Value;
                 state.Touched |= Touched.PreserveAspect;
             }
         }
 
         if (contract.ContentSizeFitterEnabled.HasValue)
         {
-            var fitter = UiCompat.GetComponent<ContentSizeFitter>(state.Rect);
+            var fitter = GetFitter(state);
             if (fitter != null)
             {
-                fitter.enabled = contract.ContentSizeFitterEnabled.Value;
+                if (fitter.enabled != contract.ContentSizeFitterEnabled.Value)
+                    fitter.enabled = contract.ContentSizeFitterEnabled.Value;
                 state.Touched |= Touched.ContentSizeFitter;
             }
         }
 
         if (contract.LayoutGroupEnabled.HasValue)
         {
-            var group = UiCompat.GetComponent<LayoutGroup>(state.Rect);
+            var group = GetGroup(state);
             if (group != null)
             {
-                group.enabled = contract.LayoutGroupEnabled.Value;
+                if (group.enabled != contract.LayoutGroupEnabled.Value)
+                    group.enabled = contract.LayoutGroupEnabled.Value;
                 state.Touched |= Touched.LayoutGroup;
             }
         }
 
         if (contract.ContentSizeFitterHorizontal != null || contract.ContentSizeFitterVertical != null)
         {
-            var fitter = UiCompat.GetComponent<ContentSizeFitter>(state.Rect);
+            var fitter = GetFitter(state);
             if (fitter != null)
             {
                 if (TryParseFitMode(contract.ContentSizeFitterHorizontal, out var horizontalMode))
                 {
-                    fitter.horizontalFit = horizontalMode;
+                    if (fitter.horizontalFit != horizontalMode)
+                        fitter.horizontalFit = horizontalMode;
                     state.Touched |= Touched.ContentSizeFitterHorizontal;
                 }
                 if (TryParseFitMode(contract.ContentSizeFitterVertical, out var verticalMode))
                 {
-                    fitter.verticalFit = verticalMode;
+                    if (fitter.verticalFit != verticalMode)
+                        fitter.verticalFit = verticalMode;
                     state.Touched |= Touched.ContentSizeFitterVertical;
                 }
             }
@@ -531,46 +660,60 @@ internal static class LayoutApplier
             || contract.LayoutGroupChildForceExpandWidth.HasValue || contract.LayoutGroupChildForceExpandHeight.HasValue
             || contract.LayoutGroupSpacing.HasValue)
         {
-            var group = UiCompat.GetComponent<HorizontalOrVerticalLayoutGroup>(state.Rect);
+            var group = GetHorizontalOrVerticalGroup(state);
             if (group != null)
             {
                 if (contract.LayoutGroupChildControlWidth.HasValue)
                 {
-                    group.childControlWidth = contract.LayoutGroupChildControlWidth.Value;
+                    if (group.childControlWidth != contract.LayoutGroupChildControlWidth.Value)
+                        group.childControlWidth = contract.LayoutGroupChildControlWidth.Value;
                     state.Touched |= Touched.LayoutGroupChildControlWidth;
                 }
                 if (contract.LayoutGroupChildControlHeight.HasValue)
                 {
-                    group.childControlHeight = contract.LayoutGroupChildControlHeight.Value;
+                    if (group.childControlHeight != contract.LayoutGroupChildControlHeight.Value)
+                        group.childControlHeight = contract.LayoutGroupChildControlHeight.Value;
                     state.Touched |= Touched.LayoutGroupChildControlHeight;
                 }
                 if (contract.LayoutGroupChildForceExpandWidth.HasValue)
                 {
-                    group.childForceExpandWidth = contract.LayoutGroupChildForceExpandWidth.Value;
+                    if (group.childForceExpandWidth != contract.LayoutGroupChildForceExpandWidth.Value)
+                        group.childForceExpandWidth = contract.LayoutGroupChildForceExpandWidth.Value;
                     state.Touched |= Touched.LayoutGroupChildForceExpandWidth;
                 }
                 if (contract.LayoutGroupChildForceExpandHeight.HasValue)
                 {
-                    group.childForceExpandHeight = contract.LayoutGroupChildForceExpandHeight.Value;
+                    if (group.childForceExpandHeight != contract.LayoutGroupChildForceExpandHeight.Value)
+                        group.childForceExpandHeight = contract.LayoutGroupChildForceExpandHeight.Value;
                     state.Touched |= Touched.LayoutGroupChildForceExpandHeight;
                 }
                 if (contract.LayoutGroupSpacing.HasValue)
                 {
-                    group.spacing = contract.LayoutGroupSpacing.Value;
+                    if (group.spacing != contract.LayoutGroupSpacing.Value)
+                        group.spacing = contract.LayoutGroupSpacing.Value;
                     state.Touched |= Touched.LayoutGroupSpacing;
                 }
             }
         }
     }
 
+    // Parsed once per distinct value: rules re-apply every tick, and Enum.TryParse is slow.
     private static bool TryParseFitMode(string value, out ContentSizeFitter.FitMode mode)
     {
+        mode = default;
         if (string.IsNullOrEmpty(value))
-        {
-            mode = default;
             return false;
+
+        if (!_fitModes.TryGetValue(value, out var parsed))
+        {
+            parsed = Enum.TryParse(value, true, out ContentSizeFitter.FitMode result) ? (int)result : -1;
+            _fitModes[value] = parsed;
         }
-        return Enum.TryParse(value, true, out mode);
+
+        if (parsed < 0)
+            return false;
+        mode = (ContentSizeFitter.FitMode)parsed;
+        return true;
     }
 
     private static void ApplyPlaceBefore(ElementState state, LayoutContract contract)
@@ -579,7 +722,7 @@ internal static class LayoutApplier
             return;
 
         var rect = state.Rect;
-        var target = ResolveRelative(rect, contract.PlaceBefore);
+        var target = ResolvePlaceTarget(state, contract);
         if (target == null || target.parent != rect.parent || target == rect.transform)
         {
             WarnOnce($"place:{contract.Path}", $"[UIEditor] placeBefore '{contract.PlaceBefore}' is not a sibling of '{state.Path}'.");
@@ -596,53 +739,118 @@ internal static class LayoutApplier
         state.Touched |= Touched.SiblingIndex;
     }
 
+    // copyRectFrom / placeBefore resolve a relative path (Split + Transform.Find per segment); an
+    // enforced rule would do that every tick, so the result is kept until the rule changes, the
+    // element is reparented, or the target is destroyed. Not-found results are retried.
+    private static RectTransform ResolveCopySource(ElementState state, LayoutContract contract)
+    {
+        var parent = state.Rect.parent;
+        if (!ReferenceEquals(state.CopySourceFor, contract) || state.CopySource == null || state.CopySourceParent != parent)
+        {
+            state.CopySource = UiCompat.As<RectTransform>(ResolveRelative(state.Rect, contract.CopyRectFrom));
+            state.CopySourceFor = state.CopySource != null ? contract : null;
+            state.CopySourceParent = parent;
+        }
+        return state.CopySource;
+    }
+
+    private static Transform ResolvePlaceTarget(ElementState state, LayoutContract contract)
+    {
+        var parent = state.Rect.parent;
+        if (!ReferenceEquals(state.PlaceTargetFor, contract) || state.PlaceTarget == null || state.PlaceTargetParent != parent)
+        {
+            state.PlaceTarget = ResolveRelative(state.Rect, contract.PlaceBefore);
+            state.PlaceTargetFor = state.PlaceTarget != null ? contract : null;
+            state.PlaceTargetParent = parent;
+        }
+        return state.PlaceTarget;
+    }
+
     private static void ApplyCounterRotation(ElementState state, LayoutContract contract)
     {
-        // Always release last time's set first: recomputing from scratch (rather than diffing
-        // against it) means a child dropped from consideration - the rule turned the feature off,
-        // its rotationZ was removed, or the child gained its own explicit rule - reliably gets its
-        // rotation restored instead of being left force-rotated forever.
-        ReleaseCounterRotatedChildren(state);
+        var wanted = contract.CounterRotateChildren == true && contract.RotationZ.HasValue;
+        var swapSize = wanted && contract.CounterRotateSwapSize == true && IsPerpendicular(contract.RotationZ.Value);
 
-        if (contract.CounterRotateChildren != true || !contract.RotationZ.HasValue)
+        // Turned off, or the size swap toggled: release everything and start over. Otherwise the
+        // new set is diffed against the last one below, so children that stay counter-rotated
+        // aren't restored and re-rotated (two real writes, a canvas rebuild) on every apply.
+        if (state.CounterRotatedChildIds != null && (!wanted || state.CounterRotateSwapped != swapSize))
+            ReleaseCounterRotatedChildren(state);
+
+        if (!wanted)
             return;
 
         var counterAngle = NormalizeAngle(-contract.RotationZ.Value);
-        var swapSize = contract.CounterRotateSwapSize == true && IsPerpendicular(contract.RotationZ.Value);
         var rect = state.Rect;
-        HashSet<int> applied = null;
+        var current = _counterRotateScratch;
+        current.Clear();
         for (var i = 0; i < rect.childCount; i++)
         {
             var child = UiCompat.As<RectTransform>(rect.GetChild(i));
             if (child == null)
                 continue;
 
-            var childPath = state.Path + "/" + child.name;
-            var childContract = _repository.Find(childPath);
-            if (childContract != null && childContract.RotationZ.HasValue)
-                continue; // an explicit rule on the child wins
+            var childId = child.GetInstanceID();
+            var childName = child.name;
+            string childPath = null;
+            if (_repository.CouldMatchName(childName))
+            {
+                childPath = state.Path + "/" + childName;
+                var childContract = _repository.Find(childPath);
+                if (childContract != null && childContract.RotationZ.HasValue)
+                    continue; // an explicit rule on the child wins (and a child dropping out is released below)
+            }
 
-            var childState = GetOrCapture(child, childPath);
-            child.localEulerAngles = new Vector3(childState.LocalEuler.x, childState.LocalEuler.y, counterAngle);
+            if (!_states.TryGetValue(childId, out var childState))
+                childState = GetOrCapture(child, childPath ?? state.Path + "/" + childName);
+
+            SetLocalEuler(child, new Vector3(childState.LocalEuler.x, childState.LocalEuler.y, counterAngle));
             childState.Touched |= Touched.Rotation;
 
             if (swapSize)
             {
-                child.sizeDelta = new Vector2(childState.SizeDelta.y, childState.SizeDelta.x);
+                var swapped = new Vector2(childState.SizeDelta.y, childState.SizeDelta.x);
+                if (!Same(child.sizeDelta, swapped))
+                    child.sizeDelta = swapped;
                 childState.Touched |= Touched.SizeDelta;
 
-                var fitter = UiCompat.GetComponent<ContentSizeFitter>(child);
-                if (fitter != null && childState.ContentSizeFitterEnabled == true)
+                if (childState.ContentSizeFitterEnabled == true)
                 {
-                    fitter.enabled = false;
-                    childState.Touched |= Touched.ContentSizeFitter;
+                    var fitter = GetFitter(childState);
+                    if (fitter != null)
+                    {
+                        if (fitter.enabled)
+                            fitter.enabled = false;
+                        childState.Touched |= Touched.ContentSizeFitter;
+                    }
                 }
             }
 
-            (applied ??= new HashSet<int>()).Add(child.GetInstanceID());
+            current.Add(childId);
         }
 
-        state.CounterRotatedChildIds = applied;
+        var previous = state.CounterRotatedChildIds;
+        if (previous != null)
+        {
+            foreach (var id in previous)
+            {
+                if (!current.Contains(id))
+                    ReleaseCounterRotatedChild(id);
+            }
+            previous.Clear();
+        }
+
+        // Swap the sets: the new one is kept, the old (now empty) one is reused next time.
+        if (current.Count > 0)
+        {
+            state.CounterRotatedChildIds = current;
+            _counterRotateScratch = previous ?? new HashSet<int>();
+        }
+        else
+        {
+            state.CounterRotatedChildIds = null;
+        }
+        state.CounterRotateSwapped = swapSize;
     }
 
     /// <summary>Restores rotation (and, if swapped, size/fitter state) on every child a rule's
@@ -653,32 +861,37 @@ internal static class LayoutApplier
             return;
 
         foreach (var id in state.CounterRotatedChildIds)
-        {
-            if (!_states.TryGetValue(id, out var childState) || childState.Rect == null)
-                continue;
-
-            if ((childState.Touched & Touched.Rotation) != 0)
-            {
-                childState.Touched &= ~Touched.Rotation;
-                childState.Rect.localEulerAngles = childState.LocalEuler;
-            }
-
-            if ((childState.Touched & Touched.SizeDelta) != 0)
-            {
-                childState.Touched &= ~Touched.SizeDelta;
-                childState.Rect.sizeDelta = childState.SizeDelta;
-            }
-
-            if ((childState.Touched & Touched.ContentSizeFitter) != 0 && childState.ContentSizeFitterEnabled.HasValue)
-            {
-                childState.Touched &= ~Touched.ContentSizeFitter;
-                var fitter = UiCompat.GetComponent<ContentSizeFitter>(childState.Rect);
-                if (fitter != null)
-                    fitter.enabled = childState.ContentSizeFitterEnabled.Value;
-            }
-        }
+            ReleaseCounterRotatedChild(id);
 
         state.CounterRotatedChildIds = null;
+        state.CounterRotateSwapped = false;
+    }
+
+    private static void ReleaseCounterRotatedChild(int id)
+    {
+        if (!_states.TryGetValue(id, out var childState) || childState.Rect == null)
+            return;
+
+        if ((childState.Touched & Touched.Rotation) != 0)
+        {
+            childState.Touched &= ~Touched.Rotation;
+            SetLocalEuler(childState.Rect, childState.LocalEuler);
+        }
+
+        if ((childState.Touched & Touched.SizeDelta) != 0)
+        {
+            childState.Touched &= ~Touched.SizeDelta;
+            if (!Same(childState.Rect.sizeDelta, childState.SizeDelta))
+                childState.Rect.sizeDelta = childState.SizeDelta;
+        }
+
+        if ((childState.Touched & Touched.ContentSizeFitter) != 0 && childState.ContentSizeFitterEnabled.HasValue)
+        {
+            childState.Touched &= ~Touched.ContentSizeFitter;
+            var fitter = GetFitter(childState);
+            if (fitter != null && fitter.enabled != childState.ContentSizeFitterEnabled.Value)
+                fitter.enabled = childState.ContentSizeFitterEnabled.Value;
+        }
     }
 
     private static float NormalizeAngle(float angle)
@@ -707,6 +920,7 @@ internal static class LayoutApplier
         var touched = state.Touched;
         state.Applied = null;
         state.Touched = Touched.None;
+        SetEnforced(state, false);
 
         ReleaseCounterRotatedChildren(state);
 
@@ -716,19 +930,19 @@ internal static class LayoutApplier
         _applying = true;
         try
         {
-            if ((touched & Touched.AnchorMin) != 0) rect.anchorMin = state.AnchorMin;
-            if ((touched & Touched.AnchorMax) != 0) rect.anchorMax = state.AnchorMax;
-            if ((touched & Touched.Pivot) != 0) rect.pivot = state.Pivot;
-            if ((touched & Touched.SizeDelta) != 0) rect.sizeDelta = state.SizeDelta;
-            if ((touched & Touched.AnchoredPosition) != 0) rect.anchoredPosition = state.AnchoredPosition;
-            if ((touched & Touched.LocalPosition) != 0) rect.localPosition = state.LocalPosition;
-            if ((touched & Touched.LocalScale) != 0) rect.localScale = state.LocalScale;
-            if ((touched & Touched.Rotation) != 0) rect.localEulerAngles = state.LocalEuler;
-            if ((touched & Touched.SiblingIndex) != 0) rect.SetSiblingIndex(state.SiblingIndex);
+            if ((touched & Touched.AnchorMin) != 0 && !Same(rect.anchorMin, state.AnchorMin)) rect.anchorMin = state.AnchorMin;
+            if ((touched & Touched.AnchorMax) != 0 && !Same(rect.anchorMax, state.AnchorMax)) rect.anchorMax = state.AnchorMax;
+            if ((touched & Touched.Pivot) != 0 && !Same(rect.pivot, state.Pivot)) rect.pivot = state.Pivot;
+            if ((touched & Touched.SizeDelta) != 0 && !Same(rect.sizeDelta, state.SizeDelta)) rect.sizeDelta = state.SizeDelta;
+            if ((touched & Touched.AnchoredPosition) != 0 && !Same(rect.anchoredPosition, state.AnchoredPosition)) rect.anchoredPosition = state.AnchoredPosition;
+            if ((touched & Touched.LocalPosition) != 0 && !Same(rect.localPosition, state.LocalPosition)) rect.localPosition = state.LocalPosition;
+            if ((touched & Touched.LocalScale) != 0 && !Same(rect.localScale, state.LocalScale)) rect.localScale = state.LocalScale;
+            if ((touched & Touched.Rotation) != 0) SetLocalEuler(rect, state.LocalEuler);
+            if ((touched & Touched.SiblingIndex) != 0 && rect.GetSiblingIndex() != state.SiblingIndex) rect.SetSiblingIndex(state.SiblingIndex);
 
             if ((touched & (Touched.ImageEnabled | Touched.PreserveAspect)) != 0)
             {
-                var image = UiCompat.GetComponent<Image>(rect);
+                var image = GetImage(state);
                 if (image != null && (touched & Touched.ImageEnabled) != 0 && state.ImageEnabled.HasValue)
                     image.enabled = state.ImageEnabled.Value;
                 if (image != null && (touched & Touched.PreserveAspect) != 0 && state.PreserveAspect.HasValue)
@@ -737,21 +951,21 @@ internal static class LayoutApplier
 
             if ((touched & Touched.ContentSizeFitter) != 0 && state.ContentSizeFitterEnabled.HasValue)
             {
-                var fitter = UiCompat.GetComponent<ContentSizeFitter>(rect);
+                var fitter = GetFitter(state);
                 if (fitter != null)
                     fitter.enabled = state.ContentSizeFitterEnabled.Value;
             }
 
             if ((touched & Touched.LayoutGroup) != 0 && state.LayoutGroupEnabled.HasValue)
             {
-                var group = UiCompat.GetComponent<LayoutGroup>(rect);
+                var group = GetGroup(state);
                 if (group != null)
                     group.enabled = state.LayoutGroupEnabled.Value;
             }
 
             if ((touched & (Touched.ContentSizeFitterHorizontal | Touched.ContentSizeFitterVertical)) != 0)
             {
-                var fitter = UiCompat.GetComponent<ContentSizeFitter>(rect);
+                var fitter = GetFitter(state);
                 if (fitter != null)
                 {
                     if ((touched & Touched.ContentSizeFitterHorizontal) != 0 && state.ContentSizeFitterHorizontal.HasValue)
@@ -765,7 +979,7 @@ internal static class LayoutApplier
                 | Touched.LayoutGroupChildForceExpandWidth | Touched.LayoutGroupChildForceExpandHeight | Touched.LayoutGroupSpacing;
             if ((touched & horizontalOrVerticalGroupFlags) != 0)
             {
-                var group = UiCompat.GetComponent<HorizontalOrVerticalLayoutGroup>(rect);
+                var group = GetHorizontalOrVerticalGroup(state);
                 if (group != null)
                 {
                     if ((touched & Touched.LayoutGroupChildControlWidth) != 0 && state.LayoutGroupChildControlWidth.HasValue)
@@ -809,6 +1023,10 @@ internal static class LayoutApplier
         {
             Rect = rect,
             Path = path,
+            Image = image,
+            Fitter = fitter,
+            Group = group,
+            HorizontalOrVerticalGroup = horizontalOrVerticalGroup,
             AnchorMin = rect.anchorMin,
             AnchorMax = rect.anchorMax,
             Pivot = rect.pivot,
@@ -836,9 +1054,81 @@ internal static class LayoutApplier
         return state;
     }
 
+    // Cached component lookups (non-generic on purpose: no generic interop wrappers, see the
+    // instructions). A missing/destroyed component is looked up again.
+    private static Image GetImage(ElementState state)
+    {
+        if (state.Image == null)
+            state.Image = UiCompat.GetComponent<Image>(state.Rect);
+        return state.Image;
+    }
+
+    private static ContentSizeFitter GetFitter(ElementState state)
+    {
+        if (state.Fitter == null)
+            state.Fitter = UiCompat.GetComponent<ContentSizeFitter>(state.Rect);
+        return state.Fitter;
+    }
+
+    private static LayoutGroup GetGroup(ElementState state)
+    {
+        if (state.Group == null)
+            state.Group = UiCompat.GetComponent<LayoutGroup>(state.Rect);
+        return state.Group;
+    }
+
+    private static HorizontalOrVerticalLayoutGroup GetHorizontalOrVerticalGroup(ElementState state)
+    {
+        if (state.HorizontalOrVerticalGroup == null)
+            state.HorizontalOrVerticalGroup = UiCompat.GetComponent<HorizontalOrVerticalLayoutGroup>(state.Rect);
+        return state.HorizontalOrVerticalGroup;
+    }
+
+    private static void SetEnforced(ElementState state, bool enforced)
+    {
+        if (state.Enforced == enforced)
+            return;
+
+        state.Enforced = enforced;
+        if (enforced)
+            _enforced.Add(state);
+        else
+            _enforced.Remove(state);
+    }
+
     private static void QueueSetActive(GameObject gameObject, bool active)
     {
         _pendingActive[gameObject.GetInstanceID()] = new KeyValuePair<GameObject, bool>(gameObject, active);
+    }
+
+    /// <summary>Re-checks elements enabled inside a fresh clone (see _pendingCloneChecks) with
+    /// their now-final paths.</summary>
+    private static void FlushCloneChecks()
+    {
+        if (_pendingCloneChecks.Count == 0)
+            return;
+
+        var pending = _cloneCheckBuffer;
+        pending.AddRange(_pendingCloneChecks.Values);
+        _pendingCloneChecks.Clear();
+
+        // Rules may have been applied to these under their old paths this tick; let the
+        // re-check apply whatever matches now.
+        _appliedThisTick.Clear();
+        _flushingCloneChecks = true;
+        try
+        {
+            foreach (var transform in pending)
+            {
+                if (transform != null)
+                    OnElementEnabled(transform);
+            }
+        }
+        finally
+        {
+            _flushingCloneChecks = false;
+            pending.Clear();
+        }
     }
 
     private static void FlushPendingActive()
@@ -846,7 +1136,8 @@ internal static class LayoutApplier
         if (_pendingActive.Count == 0)
             return;
 
-        var pending = new List<KeyValuePair<GameObject, bool>>(_pendingActive.Values);
+        var pending = _pendingBuffer;
+        pending.AddRange(_pendingActive.Values);
         _pendingActive.Clear();
 
         _applying = true;
@@ -860,28 +1151,37 @@ internal static class LayoutApplier
         }
         finally
         {
+            pending.Clear();
             _applying = false;
         }
     }
 
     private static void PruneDestroyed()
     {
-        var dead = new List<int>();
+        _framesSincePrune = 0;
+        _deadIds.Clear();
         foreach (var pair in _states)
         {
             if (pair.Value.Rect == null)
-                dead.Add(pair.Key);
+                _deadIds.Add(pair.Key);
         }
 
-        foreach (var id in dead)
+        foreach (var id in _deadIds)
+        {
+            if (_states.TryGetValue(id, out var state))
+                SetEnforced(state, false);
             _states.Remove(id);
+        }
+
+        _deadIds.Clear();
+        _countAfterPrune = _states.Count;
     }
 
     /// <summary>Resolves "../Sibling", "Child/Grandchild", "." relative to an element.</summary>
     internal static Transform ResolveRelative(Transform from, string relativePath)
     {
         var current = from;
-        foreach (var segment in relativePath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var segment in relativePath.Split(PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
             if (segment == ".")
                 continue;
@@ -894,16 +1194,82 @@ internal static class LayoutApplier
         return current;
     }
 
-    private static float[] Vector(float[] value, int dimensions, LayoutContract contract, string field)
+    /// <summary>False if the vector is unset, or set with the wrong number of components (warned once).</summary>
+    private static bool IsUsable(float[] value, int dimensions, LayoutContract contract, string field)
     {
         if (LayoutMath.IsMalformed(value, dimensions))
         {
             WarnOnce($"vector:{contract.Path}:{field}",
                 $"[UIEditor] Layout rule '{contract.Path}': {field} needs {dimensions} numbers, got {value.Length}. Ignored.");
-            return null;
+            return false;
         }
 
-        return value;
+        return value != null;
+    }
+
+    private static bool TryVector2(float[] value, LayoutContract contract, string field, out Vector2 result)
+    {
+        result = default;
+        if (!IsUsable(value, 2, contract, field))
+            return false;
+        result = new Vector2(value[0], value[1]);
+        return true;
+    }
+
+    private static bool TryVector3(float[] value, LayoutContract contract, string field, out Vector3 result)
+    {
+        result = default;
+        if (!IsUsable(value, 3, contract, field))
+            return false;
+        result = new Vector3(value[0], value[1], value[2]);
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="LayoutMath.Resolve"/> for a Vector2, without its array allocations (this runs
+    /// every tick for enforced rules): the absolute value (else the base) plus the offset, or
+    /// false when neither is set.
+    /// </summary>
+    private static bool Resolve(float[] absolute, float[] offset, Vector2 baseValue, LayoutContract contract,
+        string absoluteField, string offsetField, out Vector2 result)
+    {
+        var hasAbsolute = TryVector2(absolute, contract, absoluteField, out var absoluteValue);
+        var hasOffset = TryVector2(offset, contract, offsetField, out var offsetValue);
+        result = hasAbsolute ? absoluteValue : baseValue;
+        if (hasOffset)
+            result = new Vector2(result.x + offsetValue.x, result.y + offsetValue.y);
+        return hasAbsolute || hasOffset;
+    }
+
+    // Same tolerance as Unity's own Vector ==, done by hand so it's plain managed arithmetic.
+    private static bool Same(Vector2 a, Vector2 b)
+    {
+        var dx = a.x - b.x;
+        var dy = a.y - b.y;
+        return dx * dx + dy * dy < 1e-10f;
+    }
+
+    private static bool Same(Vector3 a, Vector3 b)
+    {
+        var dx = a.x - b.x;
+        var dy = a.y - b.y;
+        var dz = a.z - b.z;
+        return dx * dx + dy * dy + dz * dz < 1e-10f;
+    }
+
+    /// <summary>
+    /// Sets localEulerAngles unless the rotation already matches. Compared as quaternions: Euler
+    /// angles read back from a Transform can differ from the ones set (e.g. -90 vs 270) for the
+    /// same rotation.
+    /// </summary>
+    private static void SetLocalEuler(Transform transform, Vector3 euler)
+    {
+        var current = transform.localRotation;
+        var target = Quaternion.Euler(euler);
+        var dot = current.x * target.x + current.y * target.y + current.z * target.z + current.w * target.w;
+        // q and -q are the same rotation, hence the absolute value.
+        if (Math.Abs(dot) < 1f - 1e-6f)
+            transform.localEulerAngles = euler;
     }
 
     private static void WarnOnce(string key, string message)
@@ -911,10 +1277,6 @@ internal static class LayoutApplier
         if (_warned.Add(key))
             _logger?.LogWarning(message);
     }
-
-    private static float[] ToArray(Vector2 value) => new[] { value.x, value.y };
-    private static Vector2 ToVector2(float[] value) => new Vector2(value[0], value[1]);
-    private static Vector3 ToVector3(float[] value) => new Vector3(value[0], value[1], value[2]);
 }
 
 /// <summary>An element's RectTransform values at a point in time.</summary>

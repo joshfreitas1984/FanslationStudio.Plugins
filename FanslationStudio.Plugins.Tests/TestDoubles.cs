@@ -25,6 +25,12 @@ public class NoOpBehaviourAttacher : IBehaviourAttacher
         return new FakeLegacyTextMetadata();
     }
 
+    public ITextMetadata? TryGetTextMetadata(GameObject gameObject) => null;
+
+    public ILegacyTextMetadata? TryGetLegacyTextMetadata(GameObject gameObject) => null;
+
+    public TextMeshProUGUI? AsTextMeshProUGUI(TMP_Text text) => text as TextMeshProUGUI;
+
     public TextMeshProUGUI[] FindAllTextElements() => [];
 
     public Text[] FindAllLegacyTextElements() => [];

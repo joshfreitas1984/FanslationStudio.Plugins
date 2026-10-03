@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -43,6 +44,66 @@ public class TextResizerService
     // Cache for storing previously matched results
     public static Dictionary<string, TextResizerContract> CachedMatchedResizers = [];
 
+    // Caches keyed by path or instance ID only ever grow while the game runs (every distinct
+    // path/text instance seen), so they're simply dropped once they get this big.
+    private const int MaxCachedEntries = 20000;
+
+    // Texts enabled inside a hierarchy just instantiated at the scene root (root named
+    // "...(Clone)"). Games commonly move and rename such a hierarchy straight after - e.g.
+    // Instantiate(prefab), SetParent(PopRoot), name = "CreateMenu" - with no further signal, so
+    // the path seen in OnEnable matches the wrong resizer (or none). Re-checked on the next tick.
+    private const string CloneSuffix = "(Clone)";
+    private static readonly Dictionary<int, TextMeshProUGUI> PendingTmpRechecks = [];
+    private static readonly Dictionary<int, Text> PendingLegacyRechecks = [];
+    private static readonly List<TextMeshProUGUI> PendingTmpBuffer = [];
+    private static readonly List<Text> PendingLegacyBuffer = [];
+
+    // The global "/*" resizer convention matches every path - no regex needed.
+    private const string MatchAllPattern = "/*";
+
+    // Wildcard resizers in ResizersOrder order, so FindAppropriateResizer's cache misses don't
+    // re-check every exact-path resizer. Rebuilt lazily after any change (InvalidateMatches).
+    private static readonly List<TextResizerContract> WildcardResizers = [];
+    private static bool _wildcardResizersDirty = true;
+
+    // Bumped by InvalidateMatches whenever any resizer changes (including previews, which don't
+    // bump ResizersVersion). Resolutions with an older version re-resolve their resizer.
+    private static int _matchVersion = 0;
+
+    // What each text instance (by instance ID) last resolved to: its path and matching resizer,
+    // so an unchanged path skips the resizer lookup, and so the editor's hinted RefreshMatching
+    // knows which live texts exist. The path itself is rebuilt on every apply - including text
+    // changes - since games instantiate, pool, move and rename rows freely and a cached path
+    // silently stops the right resizer from applying.
+    private sealed class Resolution
+    {
+        public int Id;
+        public string Path;
+        public bool IsEditor;
+        public TextResizerContract Resizer;
+        public int Version = -1;
+        public TextMeshProUGUI Tmp;
+        public Text Legacy;
+    }
+
+    private static readonly Dictionary<int, Resolution> TmpResolutions = [];
+    private static readonly Dictionary<int, Resolution> LegacyResolutions = [];
+    // Used when instance IDs aren't available, so nothing is cached.
+    private static readonly Resolution UncachedResolution = new();
+    private static readonly List<Resolution> ResolutionScratch = [];
+    private static bool _instanceIdsAvailable = true;
+
+    // Alignment/overflow strings parsed once per distinct value (they're applied on every text
+    // change), so an invalid value is also only logged once instead of on every application.
+    private static readonly Dictionary<string, TextAlignmentOptions?> ParsedAlignments = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, TextOverflowModes?> ParsedOverflowModes = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, TextAnchor?> ParsedLegacyAlignments = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, (HorizontalWrapMode?, VerticalWrapMode?)> ParsedLegacyOverflowModes = new(StringComparer.Ordinal);
+    private const int MaxParsedValues = 1024;
+
+    // Not TrimStart(' ', '\t', ...): the params overload allocates the array on every call.
+    private static readonly char[] LeftTrimChars = { ' ', '\t', '\n', '\r' };
+
     // Flag to prevent recursion in text setter patches
     private static bool _isApplyingResizer = false;
 
@@ -56,7 +117,12 @@ public class TextResizerService
     // Directly subscribing a method group to that event fails under IL2CPP with a
     // MissingMethodException, because the interop-generated UnityAction<T1,T2> type doesn't
     // support the standard (object, IntPtr) delegate constructor the compiler emits.
+    // Scenes are compared by handle (passed in by the host, which compiles against the real
+    // assemblies): every scene not in the build settings has buildIndex -1, so changes between
+    // them were missed. The build index is only kept to catch a change between Awake and the
+    // first tick, as before.
     private static int _lastSceneBuildIndex = -1;
+    private static int? _lastSceneHandle;
 
     public TextResizerService(IPluginLogger logger, bool enabled, string bepinexRootPath, IYamlHelper yamlHelper, IBehaviourAttacher behaviourAttacher)
     {
@@ -108,6 +174,11 @@ public class TextResizerService
         Harmony.CreateAndPatchAll(typeof(TextResizerService));
         _patched = true;
         _logger.LogWarning($"TextResizer Plugin patched!");
+
+        // Texts enabled before the hooks existed (startup/menu UI) never raised OnEnable for us,
+        // so apply to everything already loaded once; the hooks cover what appears afterwards.
+        if (ResizersLoaded && Resizers.Count > 0)
+            ApplyAllResizers();
     }
 
     /// <summary>
@@ -115,17 +186,27 @@ public class TextResizerService
     /// and reapply resizers. Polling is used instead of subscribing to SceneManager.sceneLoaded
     /// to avoid an IL2CPP interop MissingMethodException on the generic UnityAction delegate.
     /// </summary>
-    public void CheckForSceneChange()
+    /// <param name="sceneHandle">SceneManager.GetActiveScene().handle, read by the host.</param>
+    public void CheckForSceneChange(int sceneHandle)
     {
         if (!ResizersLoaded)
             return;
 
-        var activeScene = SceneManager.GetActiveScene();
-        if (activeScene.buildIndex == _lastSceneBuildIndex)
+        FlushPendingRechecks();
+
+        if (_lastSceneHandle == sceneHandle)
             return;
 
-        _lastSceneBuildIndex = activeScene.buildIndex;
-        _logger.LogDebug($"Scene loaded: {activeScene.name}, reapplying all resizers");
+        var firstCheck = _lastSceneHandle == null;
+        _lastSceneHandle = sceneHandle;
+        if (firstCheck && SceneManager.GetActiveScene().buildIndex == _lastSceneBuildIndex)
+            return;
+
+        _logger.LogDebug($"Scene changed (handle {sceneHandle}), reapplying all resizers");
+
+        // Objects from the old scene are gone; ApplyAllResizers re-adds everything still alive.
+        TmpResolutions.Clear();
+        LegacyResolutions.Clear();
         ApplyAllResizers();
     }
 
@@ -135,8 +216,8 @@ public class TextResizerService
 
         Resizers.Clear();
         ResizerSourceFiles.Clear();
-        CachedMatchedResizers.Clear();
         ResizersOrder.Clear();
+        InvalidateMatches();
 
         var resizerFiles = Directory.EnumerateFiles(_resizerFolder, "*.yaml").OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
         foreach (var file in resizerFiles)
@@ -156,7 +237,19 @@ public class TextResizerService
             }
         }
 
+        InvalidateMatches();
         ResizersLoaded = true;
+    }
+
+    /// <summary>
+    /// Drops every cached path -> resizer match and marks every per-instance resolution stale.
+    /// Must be called whenever anything in Resizers changes (including in-place previews).
+    /// </summary>
+    private static void InvalidateMatches()
+    {
+        CachedMatchedResizers.Clear();
+        _wildcardResizersDirty = true;
+        _matchVersion++;
     }
 
     private void AddFoundResizers(List<TextResizerContract> newResizers, string sourceFile)
@@ -187,13 +280,18 @@ public class TextResizerService
     /// all resizers, so an in-progress edit is visible on screen right away. Used by the editor
     /// UI while the user is still editing a resizer, before they explicitly click Save.
     /// </summary>
-    public void PreviewResizer(TextResizerContract contract)
+    /// <param name="applyAll">
+    /// False skips the full ApplyAllResizers scan, for callers that follow up with
+    /// RefreshMatching for the affected paths anyway (the editor's throttled live preview).
+    /// </param>
+    public void PreviewResizer(TextResizerContract contract, bool applyAll = true)
     {
         if (!Resizers.ContainsKey(contract.Path))
             ResizersOrder.Add(contract.Path);
         Resizers[contract.Path] = contract;
-        CachedMatchedResizers.Clear();
-        ApplyAllResizers();
+        InvalidateMatches();
+        if (applyAll)
+            ApplyAllResizers();
     }
 
     /// <summary>Drops a resizer that only exists as a preview (never saved). Saved ones are kept.</summary>
@@ -204,7 +302,7 @@ public class TextResizerService
 
         Resizers.Remove(path);
         ResizersOrder.Remove(path);
-        CachedMatchedResizers.Clear();
+        InvalidateMatches();
         ResizersVersion++;
     }
 
@@ -215,35 +313,140 @@ public class TextResizerService
     /// </summary>
     public void RefreshMatching(IList<string> patterns)
     {
-        bool Matches(string path)
-        {
-            foreach (var pattern in patterns)
-            {
-                if (!string.IsNullOrEmpty(pattern) && PathPattern.IsMatch(pattern, path))
-                    return true;
-            }
-            return false;
-        }
-
-        CachedMatchedResizers.Clear();
+        InvalidateMatches();
 
         foreach (var textElement in FindAllTextElements())
         {
-            if (textElement != null && Matches(ObjectHelper.GetGameObjectPath(textElement.gameObject)))
+            if (textElement == null)
+                continue;
+
+            var path = ObjectHelper.GetGameObjectPath(textElement.gameObject);
+            if (MatchesAny(patterns, path))
             {
                 RevertToOriginal(textElement);
-                ApplyResizing(textElement);
+                ApplyResizing(textElement, path);
             }
         }
 
         foreach (var textElement in FindAllLegacyTextElements())
         {
-            if (textElement != null && Matches(ObjectHelper.GetGameObjectPath(textElement.gameObject)))
+            if (textElement == null)
+                continue;
+
+            var path = ObjectHelper.GetGameObjectPath(textElement.gameObject);
+            if (MatchesAny(patterns, path))
             {
                 RevertLegacyToOriginal(textElement);
-                ApplyResizingToLegacyText(textElement);
+                ApplyResizingToLegacyText(textElement, path);
             }
         }
+    }
+
+    /// <summary>
+    /// Same as <see cref="RefreshMatching(IList{string})"/>, but without a full rescan when every
+    /// pattern is an exact path: only the texts already seen by the hooks (the per-instance
+    /// resolutions) and the given hints - elements known to be affected, e.g. the editor's
+    /// selection - are refreshed. Mirrors LayoutApplier.Refresh. Either hint may be null.
+    /// </summary>
+    public void RefreshMatching(IList<string> patterns, TextMeshProUGUI tmpHint, Text legacyHint)
+    {
+        var anyWildcard = false;
+        foreach (var pattern in patterns)
+            anyWildcard |= PathPattern.IsWildcard(pattern);
+
+        // Without a hint (e.g. a rule opened from the rules list) the affected element may never
+        // have been seen by the hooks, so only a full rescan is sure to reach it.
+        if (anyWildcard || !_instanceIdsAvailable || (tmpHint == null && legacyHint == null))
+        {
+            RefreshMatching(patterns);
+            return;
+        }
+
+        InvalidateMatches();
+
+        var tmpHintId = 0;
+        var hasTmpHint = tmpHint != null && TryGetInstanceId(tmpHint, out tmpHintId);
+        var legacyHintId = 0;
+        var hasLegacyHint = legacyHint != null && TryGetInstanceId(legacyHint, out legacyHintId);
+
+        // Snapshot first: ApplyResizing updates (and may add to) the resolution dictionaries.
+        ResolutionScratch.Clear();
+        foreach (var resolution in TmpResolutions.Values)
+            if (resolution.Path != null && MatchesAny(patterns, resolution.Path))
+                ResolutionScratch.Add(resolution);
+
+        foreach (var resolution in ResolutionScratch)
+        {
+            var textElement = resolution.Tmp;
+            if (textElement == null)
+            {
+                TmpResolutions.Remove(resolution.Id);
+                continue;
+            }
+
+            if (hasTmpHint && resolution.Id == tmpHintId)
+                hasTmpHint = false;
+
+            RefreshTmp(patterns, textElement);
+        }
+
+        ResolutionScratch.Clear();
+        foreach (var resolution in LegacyResolutions.Values)
+            if (resolution.Path != null && MatchesAny(patterns, resolution.Path))
+                ResolutionScratch.Add(resolution);
+
+        foreach (var resolution in ResolutionScratch)
+        {
+            var textElement = resolution.Legacy;
+            if (textElement == null)
+            {
+                LegacyResolutions.Remove(resolution.Id);
+                continue;
+            }
+
+            if (hasLegacyHint && resolution.Id == legacyHintId)
+                hasLegacyHint = false;
+
+            RefreshLegacy(patterns, textElement);
+        }
+
+        ResolutionScratch.Clear();
+
+        if (hasTmpHint)
+            RefreshTmp(patterns, tmpHint);
+        if (hasLegacyHint)
+            RefreshLegacy(patterns, legacyHint);
+    }
+
+    // The cached path may be stale (reparented/renamed), so the match is rechecked on a fresh one.
+    private static void RefreshTmp(IList<string> patterns, TextMeshProUGUI textElement)
+    {
+        var path = ObjectHelper.GetGameObjectPath(textElement.gameObject);
+        if (!MatchesAny(patterns, path))
+            return;
+
+        RevertToOriginal(textElement);
+        ApplyResizing(textElement, path);
+    }
+
+    private static void RefreshLegacy(IList<string> patterns, Text textElement)
+    {
+        var path = ObjectHelper.GetGameObjectPath(textElement.gameObject);
+        if (!MatchesAny(patterns, path))
+            return;
+
+        RevertLegacyToOriginal(textElement);
+        ApplyResizingToLegacyText(textElement, path);
+    }
+
+    private static bool MatchesAny(IList<string> patterns, string path)
+    {
+        foreach (var pattern in patterns)
+        {
+            if (!string.IsNullOrEmpty(pattern) && PathPattern.IsMatch(pattern, path))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -257,7 +460,11 @@ public class TextResizerService
     /// resizer was originally loaded/selected under so the old dictionary key is removed instead
     /// of leaving a stale duplicate entry behind. Pass null/omit for a normal in-place save.
     /// </param>
-    public void SaveResizer(TextResizerContract contract, string previousPath = null)
+    /// <param name="applyAll">
+    /// False skips the full ApplyAllResizers scan, for callers that follow up with
+    /// RefreshMatching for the affected paths anyway (the editor's Save).
+    /// </param>
+    public void SaveResizer(TextResizerContract contract, string previousPath = null, bool applyAll = true)
     {
         var isRename = !string.IsNullOrEmpty(previousPath) && previousPath != contract.Path;
         string previousFile = null;
@@ -273,7 +480,7 @@ public class TextResizerService
             ResizersOrder.Add(contract.Path);
         Resizers[contract.Path] = contract;
         ResizersVersion++;
-        CachedMatchedResizers.Clear();
+        InvalidateMatches();
 
         if (!ResizerSourceFiles.TryGetValue(contract.Path, out var file))
         {
@@ -285,7 +492,8 @@ public class TextResizerService
         if (isRename && previousFile != null && previousFile != file)
             RewriteFile(previousFile);
 
-        ApplyAllResizers();
+        if (applyAll)
+            ApplyAllResizers();
 
         _logger.LogWarning($"Saved resizer '{contract.Path}' to '{file}'");
     }
@@ -305,7 +513,7 @@ public class TextResizerService
         ResizerSourceFiles.Remove(path);
         ResizersOrder.Remove(path);
         ResizersVersion++;
-        CachedMatchedResizers.Clear();
+        InvalidateMatches();
 
         if (sourceFile != null)
             RewriteFile(sourceFile);
@@ -349,36 +557,66 @@ public class TextResizerService
         return _behaviourAttacher.FindAllLegacyTextElements();
     }
 
-    public static void ApplyResizing(TextMeshProUGUI textComponent)
+    /// <summary>
+    /// Applies the matching resizer (if any) to a TMP text. Uses the instance's cached path,
+    /// so it's cheap enough for the text setter hooks; pass refreshPath when the hierarchy may
+    /// have changed since (enable/activation).
+    /// </summary>
+    public static void ApplyResizing(TextMeshProUGUI textComponent, bool refreshPath = false)
     {
         if (textComponent == null)
             return;
 
-        if (textComponent.gameObject == null)
+        var gameObject = textComponent.gameObject;
+        if (gameObject == null)
             return;
 
         if (_isApplyingResizer)
             return;
 
-        var path = ObjectHelper.GetGameObjectPath(textComponent.gameObject);
-        if (path.StartsWith(ObjectHelper.EditorObjectPrefix))
+        ApplyResizingCore(textComponent, gameObject, refreshPath ? ObjectHelper.GetGameObjectPath(gameObject) : null);
+    }
+
+    // freshPath: an already-built current path, or null to use the cached one.
+    private static void ApplyResizing(TextMeshProUGUI textComponent, string freshPath)
+    {
+        if (textComponent == null)
+            return;
+
+        var gameObject = textComponent.gameObject;
+        if (gameObject == null || _isApplyingResizer)
+            return;
+
+        ApplyResizingCore(textComponent, gameObject, freshPath);
+    }
+
+    private static void ApplyResizingCore(TextMeshProUGUI textComponent, GameObject gameObject, string freshPath)
+    {
+        var resolution = Resolve(TmpResolutions, textComponent, gameObject, freshPath);
+        if (resolution != UncachedResolution)
+            resolution.Tmp = textComponent;
+        if (resolution.IsEditor)
             return;
 
         try
         {
             _isApplyingResizer = true;
 
-            textComponent.wordWrappingRatios = 1.0f; //Disable Word wrapping ratios (should stop eastern rules)
-            textComponent.enableKerning = false;
+            // Global tweaks, applied to every TMP text even with no resizer. Read first so an
+            // already-tweaked text (the usual case on text changes) costs no setter call.
+            if (textComponent.wordWrappingRatios != 1.0f)
+                textComponent.wordWrappingRatios = 1.0f; //Disable Word wrapping ratios (should stop eastern rules)
+            if (textComponent.enableKerning)
+                textComponent.enableKerning = false;
 
-            var resizer = FindAppropriateResizer(path);
+            var resizer = resolution.Resizer;
 
             if (resizer == null)
                 return;
 
             // Cache components
             var rectTransform = textComponent.rectTransform;
-            var metadata = _behaviourAttacher.GetOrAttachTextMetadata(textComponent.gameObject, out var wasAttached);
+            var metadata = _behaviourAttacher.GetOrAttachTextMetadata(gameObject, out var wasAttached);
 
             // If metadata was just attached, store the original values against it
             if (wasAttached)
@@ -430,28 +668,22 @@ public class TextResizerService
             }
 
             // Text Alignment
-            var validAlignment = Enum.TryParse<TextAlignmentOptions>(resizer.Alignment, true, out var alignment);
-            if (resizer.Alignment != string.Empty && !validAlignment)
-                _logger.LogWarning($"Invalid alignment value: {resizer.Alignment} on {resizer.Path}");
-
-            if (validAlignment && textComponent.alignment != alignment)
+            var alignment = ParseAlignment(resizer);
+            if (alignment.HasValue && textComponent.alignment != alignment.Value)
             {
-                textComponent.alignment = alignment;
+                textComponent.alignment = alignment.Value;
             }
-            else if (!validAlignment && textComponent.alignment != metadata.OriginalAlignment)
+            else if (!alignment.HasValue && textComponent.alignment != metadata.OriginalAlignment)
             {
                 textComponent.alignment = metadata.OriginalAlignment;
             }
 
-            var validOverflow = Enum.TryParse<TextOverflowModes>(resizer.OverflowMode, true, out var overflowMode);
-            if (resizer.OverflowMode != string.Empty && !validOverflow)
-                _logger.LogWarning($"Invalid overflow value: {resizer.OverflowMode} on {resizer.Path}");
-
-            if (validOverflow && textComponent.overflowMode != overflowMode)
+            var overflowMode = ParseOverflowMode(resizer);
+            if (overflowMode.HasValue && textComponent.overflowMode != overflowMode.Value)
             {
-                textComponent.overflowMode = overflowMode;
+                textComponent.overflowMode = overflowMode.Value;
             }
-            else if (!validOverflow && textComponent.overflowMode != metadata.OriginalOverflowMode)
+            else if (!overflowMode.HasValue && textComponent.overflowMode != metadata.OriginalOverflowMode)
             {
                 textComponent.overflowMode = metadata.OriginalOverflowMode;
             }
@@ -517,8 +749,9 @@ public class TextResizerService
             if (resizer.AllowLeftTrimText)
             {
                 //Trim it first so when it initialises it at least trims
-                var trimmed = textComponent.text.TrimStart(' ', '\t', '\n', '\r');
-                if (textComponent.text != trimmed)
+                var text = textComponent.text;
+                var trimmed = text?.TrimStart(LeftTrimChars);
+                if (text != null && trimmed.Length != text.Length)
                     textComponent.text = trimmed;
             }
 
@@ -556,8 +789,10 @@ public class TextResizerService
         if (textComponent == null || textComponent.gameObject == null)
             return;
 
-        var metadata = _behaviourAttacher.GetOrAttachTextMetadata(textComponent.gameObject, out var wasAttached);
-        if (wasAttached)
+        // TryGet, not GetOrAttach: attaching here would leave empty (all-zero) metadata behind,
+        // which a later ApplyResizing would then treat as the captured originals.
+        var metadata = _behaviourAttacher.TryGetTextMetadata(textComponent.gameObject);
+        if (metadata == null)
             return;
 
         try
@@ -593,33 +828,55 @@ public class TextResizerService
         }
     }
 
-    public static void ApplyResizingToLegacyText(Text textComponent)
+    /// <summary>Legacy Text counterpart of <see cref="ApplyResizing(TextMeshProUGUI, bool)"/>.</summary>
+    public static void ApplyResizingToLegacyText(Text textComponent, bool refreshPath = false)
     {
-        if (textComponent == null)
+        // Legacy text has no global tweaks, so with no resizers there's nothing to do at all.
+        if (textComponent == null || Resizers.Count == 0)
             return;
 
-        if (textComponent.gameObject == null)
+        var gameObject = textComponent.gameObject;
+        if (gameObject == null)
             return;
 
         if (_isApplyingResizer)
             return;
 
-        var path = ObjectHelper.GetGameObjectPath(textComponent.gameObject);
-        if (path.StartsWith(ObjectHelper.EditorObjectPrefix))
+        ApplyResizingToLegacyTextCore(textComponent, gameObject, refreshPath ? ObjectHelper.GetGameObjectPath(gameObject) : null);
+    }
+
+    private static void ApplyResizingToLegacyText(Text textComponent, string freshPath)
+    {
+        if (textComponent == null || Resizers.Count == 0)
+            return;
+
+        var gameObject = textComponent.gameObject;
+        if (gameObject == null || _isApplyingResizer)
+            return;
+
+        ApplyResizingToLegacyTextCore(textComponent, gameObject, freshPath);
+    }
+
+    private static void ApplyResizingToLegacyTextCore(Text textComponent, GameObject gameObject, string freshPath)
+    {
+        var resolution = Resolve(LegacyResolutions, textComponent, gameObject, freshPath);
+        if (resolution != UncachedResolution)
+            resolution.Legacy = textComponent;
+        if (resolution.IsEditor)
             return;
 
         try
         {
             _isApplyingResizer = true;
 
-            var resizer = FindAppropriateResizer(path);
+            var resizer = resolution.Resizer;
 
             if (resizer == null)
                 return;
 
             // Cache components
             var rectTransform = textComponent.rectTransform;
-            var metadata = _behaviourAttacher.GetOrAttachLegacyTextMetadata(textComponent.gameObject, out var wasAttached);
+            var metadata = _behaviourAttacher.GetOrAttachLegacyTextMetadata(gameObject, out var wasAttached);
 
             // If metadata was just attached, store the original values against it
             if (wasAttached)
@@ -673,7 +930,7 @@ public class TextResizerService
             // Text Alignment - convert from TMP alignment to legacy Text alignment
             if (!string.IsNullOrEmpty(resizer.Alignment))
             {
-                var alignment = ConvertTMPAlignmentToTextAnchor(resizer.Alignment);
+                var alignment = ParseLegacyAlignment(resizer.Alignment);
                 if (alignment.HasValue && textComponent.alignment != alignment.Value)
                 {
                     textComponent.alignment = alignment.Value;
@@ -687,7 +944,7 @@ public class TextResizerService
             // Overflow mode - map TMP overflow to legacy Text overflow
             if (!string.IsNullOrEmpty(resizer.OverflowMode))
             {
-                var (horizontal, vertical) = ConvertTMPOverflowToTextOverflow(resizer.OverflowMode);
+                var (horizontal, vertical) = ParseLegacyOverflowMode(resizer.OverflowMode);
                 if (horizontal.HasValue && textComponent.horizontalOverflow != horizontal.Value)
                 {
                     textComponent.horizontalOverflow = horizontal.Value;
@@ -752,8 +1009,9 @@ public class TextResizerService
 
             if (resizer.AllowLeftTrimText)
             {
-                var trimmed = textComponent.text.TrimStart(' ', '\t', '\n', '\r');
-                if (textComponent.text != trimmed)
+                var text = textComponent.text;
+                var trimmed = text?.TrimStart(LeftTrimChars);
+                if (text != null && trimmed.Length != text.Length)
                     textComponent.text = trimmed;
             }
         }
@@ -777,8 +1035,9 @@ public class TextResizerService
         if (textComponent == null || textComponent.gameObject == null)
             return;
 
-        var metadata = _behaviourAttacher.GetOrAttachLegacyTextMetadata(textComponent.gameObject, out var wasAttached);
-        if (wasAttached)
+        // TryGet, not GetOrAttach - see RevertToOriginal.
+        var metadata = _behaviourAttacher.TryGetLegacyTextMetadata(textComponent.gameObject);
+        if (metadata == null)
             return;
 
         try
@@ -820,7 +1079,7 @@ public class TextResizerService
     // "UpperLeft") is used as-is; a TMP name is translated down to the nearest TextAnchor.
     private static TextAnchor? ConvertTMPAlignmentToTextAnchor(string alignment)
     {
-        var fromTmpName = alignment?.ToLower() switch
+        var fromTmpName = alignment?.ToLowerInvariant() switch
         {
             "topleft" => TextAnchor.UpperLeft,
             "top" => TextAnchor.UpperCenter,
@@ -852,7 +1111,7 @@ public class TextResizerService
     // legacy enums (e.g. "Wrap") fall through to being applied to their one native axis.
     private static (HorizontalWrapMode?, VerticalWrapMode?) ConvertTMPOverflowToTextOverflow(string overflowMode)
     {
-        var fromTmpName = overflowMode?.ToLower() switch
+        var fromTmpName = overflowMode?.ToLowerInvariant() switch
         {
             "overflow" => (HorizontalWrapMode.Overflow, VerticalWrapMode.Overflow),
             "ellipsis" => (HorizontalWrapMode.Overflow, VerticalWrapMode.Truncate),
@@ -873,6 +1132,9 @@ public class TextResizerService
 
     public static TextResizerContract FindAppropriateResizer(string path)
     {
+        if (path == null)
+            return null;
+
         if (Resizers.TryGetValue(path, out var tryResizer))
             return tryResizer;
 
@@ -880,32 +1142,177 @@ public class TextResizerService
         if (CachedMatchedResizers.TryGetValue(path, out var cachedResizer))
             return cachedResizer;
 
+        if (_wildcardResizersDirty)
+            RebuildWildcardResizers();
+
         // Try wildcard matching for the remaining resizers, in a stable load order rather than
         // Resizers' own (unordered) dictionary enumeration - otherwise, when more than one
         // wildcard resizer matches the same path, whichever the dictionary happens to enumerate
         // first wins, which looks like a random pick to the user.
-        foreach (var key in ResizersOrder)
+        TextResizerContract match = null;
+        foreach (var resizer in WildcardResizers)
         {
-            var resizer = Resizers[key];
-
-            if (PathPattern.IsWildcard(resizer.Path) && PathPattern.IsMatch(resizer.Path, path))
+            if (resizer.Path == MatchAllPattern || PathPattern.IsMatch(resizer.Path, path))
             {
-                CachedMatchedResizers[path] = resizer;
-                return resizer;
+                match = resizer;
+                break;
             }
         }
 
-        CachedMatchedResizers[path] = null;
-        return null;
+        if (CachedMatchedResizers.Count >= MaxCachedEntries)
+            CachedMatchedResizers.Clear();
+        CachedMatchedResizers[path] = match;
+        return match;
     }
 
+    private static void RebuildWildcardResizers()
+    {
+        WildcardResizers.Clear();
+        foreach (var key in ResizersOrder)
+        {
+            if (Resizers.TryGetValue(key, out var resizer) && PathPattern.IsWildcard(resizer.Path))
+                WildcardResizers.Add(resizer);
+        }
+        _wildcardResizersDirty = false;
+    }
+
+    // Resolves (and caches per instance) the text's path and matching resizer. freshPath, when
+    // given, replaces the cached path; otherwise the path is only built on the first sighting.
+    private static Resolution Resolve(Dictionary<int, Resolution> cache, Component textComponent, GameObject gameObject, string freshPath)
+    {
+        Resolution resolution;
+        if (TryGetInstanceId(textComponent, out var id))
+        {
+            if (!cache.TryGetValue(id, out resolution))
+            {
+                if (cache.Count >= MaxCachedEntries)
+                    cache.Clear();
+                resolution = new Resolution { Id = id };
+                cache[id] = resolution;
+            }
+        }
+        else
+        {
+            resolution = UncachedResolution;
+            resolution.Path = null;
+        }
+
+        if (freshPath != null || resolution.Path == null)
+        {
+            var path = freshPath ?? ObjectHelper.GetGameObjectPath(gameObject);
+            if (path != resolution.Path)
+            {
+                resolution.Path = path;
+                resolution.IsEditor = ObjectHelper.IsEditorObjectPath(path);
+                resolution.Version = -1;
+            }
+        }
+
+        if (resolution.Version != _matchVersion)
+        {
+            resolution.Resizer = resolution.IsEditor ? null : FindAppropriateResizer(resolution.Path);
+            resolution.Version = _matchVersion;
+        }
+
+        return resolution;
+    }
+
+    // GetInstanceID isn't otherwise called from Shared, and any Unity call made from Shared can
+    // fail to bind on some IL2CPP builds (see .github/copilot-instructions.md item 5). It's kept
+    // in its own method so a MissingMethodException (thrown when that method is compiled) can be
+    // caught here; if it happens, the per-instance cache is simply turned off.
+    private static bool TryGetInstanceId(UnityEngine.Object obj, out int id)
+    {
+        id = 0;
+        if (!_instanceIdsAvailable)
+            return false;
+
+        try
+        {
+            id = GetInstanceIdCore(obj);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _instanceIdsAvailable = false;
+            TmpResolutions.Clear();
+            LegacyResolutions.Clear();
+            _logger?.LogWarning($"TextResizer: GetInstanceID unavailable, text paths won't be cached: {ex.Message}");
+            return false;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int GetInstanceIdCore(UnityEngine.Object obj) => obj.GetInstanceID();
+
+    private static TextAlignmentOptions? ParseAlignment(TextResizerContract resizer)
+    {
+        var value = resizer.Alignment;
+        if (string.IsNullOrEmpty(value))
+            return null;
+
+        if (!ParsedAlignments.TryGetValue(value, out var parsed))
+        {
+            parsed = Enum.TryParse<TextAlignmentOptions>(value, true, out var alignment) ? alignment : null;
+            if (parsed == null)
+                _logger.LogWarning($"Invalid alignment value: {value} on {resizer.Path}");
+            if (ParsedAlignments.Count >= MaxParsedValues)
+                ParsedAlignments.Clear();
+            ParsedAlignments[value] = parsed;
+        }
+        return parsed;
+    }
+
+    private static TextOverflowModes? ParseOverflowMode(TextResizerContract resizer)
+    {
+        var value = resizer.OverflowMode;
+        if (string.IsNullOrEmpty(value))
+            return null;
+
+        if (!ParsedOverflowModes.TryGetValue(value, out var parsed))
+        {
+            parsed = Enum.TryParse<TextOverflowModes>(value, true, out var overflowMode) ? overflowMode : null;
+            if (parsed == null)
+                _logger.LogWarning($"Invalid overflow value: {value} on {resizer.Path}");
+            if (ParsedOverflowModes.Count >= MaxParsedValues)
+                ParsedOverflowModes.Clear();
+            ParsedOverflowModes[value] = parsed;
+        }
+        return parsed;
+    }
+
+    private static TextAnchor? ParseLegacyAlignment(string value)
+    {
+        if (!ParsedLegacyAlignments.TryGetValue(value, out var parsed))
+        {
+            parsed = ConvertTMPAlignmentToTextAnchor(value);
+            if (ParsedLegacyAlignments.Count >= MaxParsedValues)
+                ParsedLegacyAlignments.Clear();
+            ParsedLegacyAlignments[value] = parsed;
+        }
+        return parsed;
+    }
+
+    private static (HorizontalWrapMode?, VerticalWrapMode?) ParseLegacyOverflowMode(string value)
+    {
+        if (!ParsedLegacyOverflowModes.TryGetValue(value, out var parsed))
+        {
+            parsed = ConvertTMPOverflowToTextOverflow(value);
+            if (ParsedLegacyOverflowModes.Count >= MaxParsedValues)
+                ParsedLegacyOverflowModes.Clear();
+            ParsedLegacyOverflowModes[value] = parsed;
+        }
+        return parsed;
+    }
+
+    /// <summary>Applies resizers to every loaded text, rebuilding each one's path.</summary>
     public static void ApplyAllResizers()
     {
         foreach (var textElement in FindAllTextElements())
-            ApplyResizing(textElement);
+            ApplyResizing(textElement, refreshPath: true);
 
         foreach (var textElement in FindAllLegacyTextElements())
-            ApplyResizingToLegacyText(textElement);
+            ApplyResizingToLegacyText(textElement, refreshPath: true);
     }
 
     [HarmonyPostfix, HarmonyPatch(typeof(TextMeshProUGUI), "OnEnable", MethodType.Normal)]
@@ -914,7 +1321,10 @@ public class TextResizerService
         if (!ResizersLoaded)
             return;
 
-        ApplyResizing(__instance);
+        ApplyResizing(__instance, refreshPath: true);
+        if (IsInFreshClone(__instance) && TryGetInstanceId(__instance, out var id)
+            && PendingTmpRechecks.Count < MaxCachedEntries)
+            PendingTmpRechecks[id] = __instance;
     }
 
     [HarmonyPostfix, HarmonyPatch(typeof(Text), "OnEnable", MethodType.Normal)]
@@ -923,17 +1333,63 @@ public class TextResizerService
         if (!ResizersLoaded)
             return;
 
-        ApplyResizingToLegacyText(__instance);
+        ApplyResizingToLegacyText(__instance, refreshPath: true);
+        if (IsInFreshClone(__instance) && TryGetInstanceId(__instance, out var id)
+            && PendingLegacyRechecks.Count < MaxCachedEntries)
+            PendingLegacyRechecks[id] = __instance;
     }
 
+    // True when the text's hierarchy root is a just-instantiated prefab still sitting at the
+    // scene root, i.e. likely to be reparented/renamed before the frame ends.
+    private static bool IsInFreshClone(Component component)
+    {
+        if (Resizers.Count == 0 || component == null)
+            return false;
+
+        var rootName = component.transform.root.name;
+        return rootName != null && rootName.EndsWith(CloneSuffix, StringComparison.Ordinal);
+    }
+
+    // Re-applies texts queued by the OnEnable postfixes, with their now-final paths.
+    private static void FlushPendingRechecks()
+    {
+        if (PendingTmpRechecks.Count > 0)
+        {
+            PendingTmpBuffer.AddRange(PendingTmpRechecks.Values);
+            PendingTmpRechecks.Clear();
+            foreach (var text in PendingTmpBuffer)
+            {
+                if (text != null)
+                    ApplyResizing(text, refreshPath: true);
+            }
+            PendingTmpBuffer.Clear();
+        }
+
+        if (PendingLegacyRechecks.Count > 0)
+        {
+            PendingLegacyBuffer.AddRange(PendingLegacyRechecks.Values);
+            PendingLegacyRechecks.Clear();
+            foreach (var text in PendingLegacyBuffer)
+            {
+                if (text != null)
+                    ApplyResizingToLegacyText(text, refreshPath: true);
+            }
+            PendingLegacyBuffer.Clear();
+        }
+    }
+
+    // Text setters rebuild the path too: a row instantiated or pooled elsewhere and then moved
+    // (or renamed) usually only signals its final place through its text being set.
     [HarmonyPostfix, HarmonyPatch(typeof(TMP_Text), "text", MethodType.Setter)]
     public static void Postfix_TMP_SetText(TMP_Text __instance)
     {
         if (!ResizersLoaded)
             return;
 
-        if (__instance is TextMeshProUGUI tmpugui)
-            ApplyResizing(tmpugui);
+        // Through the host: `is` on the IL2CPP wrapper (typed TMP_Text) would always be false.
+        var tmpugui = _behaviourAttacher.AsTextMeshProUGUI(__instance);
+        if (tmpugui != null)
+            ApplyResizing(tmpugui, refreshPath: true);
     }
 
     [HarmonyPostfix, HarmonyPatch(typeof(Text), "text", MethodType.Setter)]
@@ -942,6 +1398,6 @@ public class TextResizerService
         if (!ResizersLoaded)
             return;
 
-        ApplyResizingToLegacyText(__instance);
+        ApplyResizingToLegacyText(__instance, refreshPath: true);
     }
 }

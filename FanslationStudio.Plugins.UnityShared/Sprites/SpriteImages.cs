@@ -55,6 +55,10 @@ internal static class SpriteImages
     /// <summary>
     /// Loads a PNG as a texture. Marked DontUnloadUnusedAsset so Resources.UnloadUnusedAssets
     /// (which games call on scene changes) doesn't free it while it's cached.
+    ///
+    /// Kept readable: uGUI's Image.IsRaycastLocationValid reads the sprite's pixels when a game
+    /// uses alphaHitTestMinimumThreshold (shaped buttons), and logs an error on every raycast if
+    /// the texture is non-readable.
     /// </summary>
     public static Texture2D LoadTexture(byte[] png, string name, FilterMode filterMode)
     {

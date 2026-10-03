@@ -1,9 +1,10 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
 using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.Update;
+using UnityEngine;
 
 namespace FanslationStudio.Plugins.UnityShared.Update;
 
@@ -21,6 +22,7 @@ internal static class UpdateHost
     private static string _gameDir;
     private static DateTime _showAfterUtc;
     private static string _lastError;
+    private static int _lastTickedFrame = -1;
 
     public static bool Enabled { get; private set; }
 
@@ -76,6 +78,12 @@ internal static class UpdateHost
     {
         if (!Enabled)
             return;
+
+        // The Mono tick (Canvas.willRenderCanvases) can be raised several times in one frame.
+        var frame = Time.frameCount;
+        if (frame == _lastTickedFrame)
+            return;
+        _lastTickedFrame = frame;
 
         try
         {

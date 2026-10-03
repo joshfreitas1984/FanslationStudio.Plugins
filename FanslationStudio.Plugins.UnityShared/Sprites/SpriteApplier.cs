@@ -20,6 +20,9 @@ namespace FanslationStudio.Plugins.UnityShared.Sprites;
 ///     Textures and sprites are cached; our own sprites are tracked so they're never replaced again.
 ///   * The original sprite is remembered per Image, so a rule can be reverted - but only if the
 ///     Image still shows our replacement (if the game has moved on, its sprite is left alone).
+///   * Image.sprite is set constantly by animated images, so the hook path filters by the Image's
+///     own name before building its path, and missing/unreadable PNGs are remembered rather than
+///     re-checked on disk every time (until Reload / ReloadFile).
 /// </summary>
 internal static class SpriteApplier
 {
@@ -29,8 +32,26 @@ internal static class SpriteApplier
         public Image Image;
         public Sprite Original;
         public Sprite Replacement;
+        public int ReplacementId;
         public string Path;
         public string File;
+    }
+
+    /// <summary>A replacement built for one original sprite (kept so it can be freed once the
+    /// original is gone).</summary>
+    private sealed class CachedSprite
+    {
+        public Sprite Original;
+        public Sprite Replacement;
+        public int ReplacementId;
+    }
+
+    private struct CachedPath
+    {
+        public string Path;
+        public string Name;
+        public int ParentId;
+        public int RootId;
     }
 
     private static ContractRepository<SpriteContract> _repository;
@@ -38,11 +59,31 @@ internal static class SpriteApplier
 
     private static readonly Dictionary<int, Replaced> _replaced = new Dictionary<int, Replaced>();
     private static readonly Dictionary<string, Texture2D> _textures = new Dictionary<string, Texture2D>();
-    private static readonly Dictionary<string, Sprite> _sprites = new Dictionary<string, Sprite>();
+    // File name -> original sprite instance ID -> replacement.
+    private static readonly Dictionary<string, Dictionary<int, CachedSprite>> _sprites = new Dictionary<string, Dictionary<int, CachedSprite>>();
     private static readonly HashSet<int> _ourSprites = new HashSet<int>();
-    // Image.sprite is set often (sprite animation); don't rebuild hierarchy paths every time.
-    private static readonly Dictionary<int, string> _pathCache = new Dictionary<int, string>();
+    // PNGs that were missing or unreadable, so a matching rule doesn't hit the disk on every
+    // Image.sprite set. Cleared by Reload / ReloadFile.
+    private static readonly HashSet<string> _badFiles = new HashSet<string>();
+    // Image.sprite is set often (sprite animation); don't rebuild hierarchy paths every time. An
+    // entry is trusted only while the Image's name, parent and root are unchanged (rows are often
+    // instantiated at the root and then reparented), and the cache is dropped periodically.
+    private static readonly Dictionary<int, CachedPath> _pathCache = new Dictionary<int, CachedPath>();
     private static readonly HashSet<string> _warned = new HashSet<string>();
+    private static readonly HashSet<int> _inUse = new HashSet<int>();
+    private static readonly List<int> _deadIds = new List<int>();
+
+    private const int MaxCachedPaths = 20000;
+
+    // Images enabled inside a hierarchy just instantiated at the scene root (root named
+    // "...(Clone)"). Games commonly move and rename it straight after - e.g. Instantiate(prefab),
+    // SetParent(PopRoot), name = "CreateMenu" - with no further signal, so the path seen when
+    // they were enabled matches the wrong rule (or none). Checked again, fresh, on the next tick.
+    private const string CloneSuffix = "(Clone)";
+    private static readonly Dictionary<int, Image> _pendingCloneChecks = new Dictionary<int, Image>();
+    private static readonly List<Image> _cloneCheckBuffer = new List<Image>();
+    private const int MaintenanceIntervalFrames = 600;
+    private static int _framesSinceMaintenance;
 
     private static bool _applying;
     private static int _lastSceneHandle;
@@ -61,16 +102,28 @@ internal static class SpriteApplier
 
         UiHooks.GraphicEnabled += graphic =>
         {
-            if (!HasRules)
+            if (_applying || !HasRules)
+                return;
+            // The name check first: it's cheaper than the interop cast, and rules out most graphics.
+            var name = graphic.name;
+            if (!_repository.CouldMatchName(name))
                 return;
             var image = UiCompat.As<Image>(graphic);
-            if (image != null)
-                Apply(image, CachedPath(image));
+            if (image == null)
+                return;
+            ApplyAt(image, GetCachedPath(image, name));
+            if (_pendingCloneChecks.Count < MaxCachedPaths
+                && image.transform.root.name.EndsWith(CloneSuffix, StringComparison.Ordinal))
+                _pendingCloneChecks[image.GetInstanceID()] = image;
         };
         UiHooks.ImageSpriteSet += image =>
         {
-            if (HasRules)
-                Apply(image, CachedPath(image));
+            // _applying first: our own `image.sprite = replacement` raises this hook again.
+            if (_applying || !HasRules)
+                return;
+            var name = image.name;
+            if (_repository.CouldMatchName(name))
+                ApplyAt(image, GetCachedPath(image, name));
         };
 
         _logger.LogInfo($"[UIEditor] Loaded {_repository.Count} sprite rule(s) from '{_repository.Folder}'.");
@@ -81,17 +134,58 @@ internal static class SpriteApplier
         if (_repository == null)
             return;
 
-        var sceneHandle = SceneManager.GetActiveScene().handle;
-        if (sceneHandle == _lastSceneHandle)
-            return;
+        FlushCloneChecks();
 
-        _lastSceneHandle = sceneHandle;
-        _pathCache.Clear();
-        PruneDestroyed();
-        ReapplyAll();
+        var sceneHandle = SceneManager.GetActiveScene().handle;
+        if (sceneHandle != _lastSceneHandle)
+        {
+            _lastSceneHandle = sceneHandle;
+            _framesSinceMaintenance = 0;
+            _pathCache.Clear();
+            PruneDestroyed();
+            PruneReplacementSprites();
+            ReapplyAll();
+            return;
+        }
+
+        // Also catches assets a game unloads some frames after the scene change.
+        if (++_framesSinceMaintenance >= MaintenanceIntervalFrames)
+        {
+            _framesSinceMaintenance = 0;
+            _pathCache.Clear();
+            // Re-check missing PNGs now and then, so one copied in by hand is picked up.
+            _badFiles.Clear();
+            PruneDestroyed();
+            PruneReplacementSprites();
+        }
     }
 
     public static string PngPath(string fileName) => Path.Combine(DumpFolder, fileName + ".png");
+
+    /// <summary>Re-applies Images enabled inside a fresh clone (see _pendingCloneChecks), with
+    /// their now-final paths.</summary>
+    private static void FlushCloneChecks()
+    {
+        if (_pendingCloneChecks.Count == 0)
+            return;
+
+        var pending = _cloneCheckBuffer;
+        pending.AddRange(_pendingCloneChecks.Values);
+        _pendingCloneChecks.Clear();
+        try
+        {
+            foreach (var image in pending)
+            {
+                // Apply with no path builds it fresh.
+                if (image != null)
+                    Apply(image);
+            }
+        }
+        finally
+        {
+            pending.Clear();
+        }
+    }
 
     public static bool IsOurs(Sprite sprite) => sprite != null && _ourSprites.Contains(sprite.GetInstanceID());
 
@@ -111,8 +205,10 @@ internal static class SpriteApplier
         if (_repository == null)
             return null;
 
-        foreach (var contract in _repository.FindCandidates(path))
+        var candidates = _repository.FindCandidates(path);
+        for (var i = 0; i < candidates.Count; i++)
         {
+            var contract = candidates[i];
             if (!contract.IsEnabled())
                 continue;
             if (string.IsNullOrEmpty(contract.OriginalSprite) || contract.OriginalSprite == spriteName)
@@ -121,37 +217,83 @@ internal static class SpriteApplier
         return null;
     }
 
+    /// <summary>As <see cref="Match(string, string)"/>, reading the sprite's name only if a
+    /// candidate actually filters on it.</summary>
+    private static SpriteContract Match(IReadOnlyList<SpriteContract> candidates, Sprite sprite)
+    {
+        string spriteName = null;
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var contract = candidates[i];
+            if (!contract.IsEnabled())
+                continue;
+            if (string.IsNullOrEmpty(contract.OriginalSprite))
+                return contract;
+            spriteName ??= sprite.name;
+            if (contract.OriginalSprite == spriteName)
+                return contract;
+        }
+        return null;
+    }
+
     public static void Apply(Image image, string path = null)
     {
-        if (_applying || image == null)
+        if (_applying || image == null || !HasRules)
+            return;
+
+        if (path == null)
+        {
+            var name = image.name;
+            if (!_repository.CouldMatchName(name))
+                return;
+            // Not a hook path (rescans, reloads), so build it fresh: the cached path only notices
+            // the Image's own rename/reparent, not an ancestor's.
+            path = ObjectHelper.GetGameObjectPath(image.gameObject);
+        }
+
+        ApplyAt(image, path);
+    }
+
+    private static void ApplyAt(Image image, string path)
+    {
+        if (ObjectHelper.IsEditorObjectPath(path))
+            return;
+
+        // Rule lookup (cached per path) before touching the sprite at all.
+        var candidates = _repository.FindCandidates(path);
+        if (candidates.Count == 0)
             return;
 
         var current = image.sprite;
         if (current == null || IsOurs(current))
             return;
 
-        path = path ?? ObjectHelper.GetGameObjectPath(image.gameObject);
-        if (path.StartsWith(ElementPicker.EditorObjectPrefix))
-            return;
-
-        var contract = Match(path, current.name);
+        var contract = Match(candidates, current);
         if (contract == null)
             return;
 
-        var replacement = GetReplacement(contract.ReplacementSprite, current);
+        var replacement = GetCachedReplacement(contract.ReplacementSprite, current);
         if (replacement == null)
             return;
 
+        // Updated in place: the game re-setting the sprite (animation) re-applies constantly.
         var id = image.GetInstanceID();
-        _replaced[id] = new Replaced
+        if (!_replaced.TryGetValue(id, out var entry))
         {
-            Id = id, Image = image, Original = current, Replacement = replacement, Path = path, File = contract.ReplacementSprite,
-        };
+            entry = new Replaced { Id = id };
+            _replaced[id] = entry;
+        }
+        entry.Image = image;
+        entry.Original = current;
+        entry.Replacement = replacement.Replacement;
+        entry.ReplacementId = replacement.ReplacementId;
+        entry.Path = path;
+        entry.File = contract.ReplacementSprite;
 
         _applying = true;
         try
         {
-            image.sprite = replacement;
+            image.sprite = replacement.Replacement;
         }
         finally
         {
@@ -208,10 +350,19 @@ internal static class SpriteApplier
                 Revert(entry);
         }
 
+        if (!HasRules)
+            return;
+
         foreach (var image in UiCompat.FindObjectsOfType<Image>())
         {
             if (image == null)
                 continue;
+            // A name no rule can match would find no rule in Apply anyway.
+            var name = image.name;
+            if (!_repository.CouldMatchName(name))
+                continue;
+            // Fresh rather than cached: the user just picked this element, and an ancestor may
+            // have been renamed or moved since the path was cached.
             var path = ObjectHelper.GetGameObjectPath(image.gameObject);
             if (Matches(path))
                 Apply(image, path);
@@ -233,6 +384,7 @@ internal static class SpriteApplier
 
         ClearCaches(fileName);
         _warned.Remove("missing:" + fileName);
+        _warned.Remove("invalid:" + fileName);
 
         foreach (var image in affected)
             Apply(image);
@@ -272,7 +424,7 @@ internal static class SpriteApplier
         {
             if (image == null || !image.gameObject.activeInHierarchy)
                 continue;
-            if (ObjectHelper.GetGameObjectPath(image.gameObject).StartsWith(ElementPicker.EditorObjectPrefix))
+            if (ObjectHelper.IsEditorObjectPath(ObjectHelper.GetGameObjectPath(image.gameObject)))
                 continue;
 
             var original = GetOriginalSprite(image);
@@ -293,6 +445,10 @@ internal static class SpriteApplier
                 WarnOnce("dump:" + fileName, $"[UIEditor] Could not dump sprite '{original.name}': {ex.Message}");
             }
         }
+
+        // The dump may have written PNGs that rules were already waiting for.
+        if (written > 0)
+            _badFiles.Clear();
         return written;
     }
 
@@ -314,25 +470,38 @@ internal static class SpriteApplier
     }
 
     /// <summary>The (cached) replacement sprite built from a PNG for this original, or null if the PNG is missing.</summary>
-    public static Sprite GetReplacementSprite(string fileName, Sprite original) => GetReplacement(fileName, original);
+    public static Sprite GetReplacementSprite(string fileName, Sprite original)
+    {
+        return original == null ? null : GetCachedReplacement(fileName, original)?.Replacement;
+    }
 
-    private static Sprite GetReplacement(string fileName, Sprite original)
+    private static CachedSprite GetCachedReplacement(string fileName, Sprite original)
     {
         if (string.IsNullOrEmpty(fileName))
             return null;
 
-        var key = fileName + "|" + original.GetInstanceID();
-        if (_sprites.TryGetValue(key, out var cached) && cached != null)
-            return cached;
+        var originalId = original.GetInstanceID();
+        if (_sprites.TryGetValue(fileName, out var byOriginal) && byOriginal.TryGetValue(originalId, out var cached))
+        {
+            if (cached.Replacement != null)
+                return cached;
+
+            // Destroyed behind our back (e.g. by the game); build a new one.
+            _ourSprites.Remove(cached.ReplacementId);
+            byOriginal.Remove(originalId);
+        }
 
         var texture = GetTexture(fileName, original);
         if (texture == null)
             return null;
 
         var sprite = SpriteImages.CreateReplacement(texture, original);
-        _sprites[key] = sprite;
-        _ourSprites.Add(sprite.GetInstanceID());
-        return sprite;
+        cached = new CachedSprite { Original = original, Replacement = sprite, ReplacementId = sprite.GetInstanceID() };
+        if (byOriginal == null)
+            _sprites[fileName] = byOriginal = new Dictionary<int, CachedSprite>();
+        byOriginal[originalId] = cached;
+        _ourSprites.Add(cached.ReplacementId);
+        return cached;
     }
 
     private static Texture2D GetTexture(string fileName, Sprite original)
@@ -340,9 +509,13 @@ internal static class SpriteApplier
         if (_textures.TryGetValue(fileName, out var cached) && cached != null)
             return cached;
 
+        if (_badFiles.Contains(fileName))
+            return null;
+
         var file = PngPath(fileName);
         if (!File.Exists(file))
         {
+            _badFiles.Add(fileName);
             WarnOnce("missing:" + fileName, $"[UIEditor] Replacement image not found: {file}");
             return null;
         }
@@ -351,6 +524,7 @@ internal static class SpriteApplier
         var texture = SpriteImages.LoadTexture(File.ReadAllBytes(file), fileName, filter);
         if (texture == null)
         {
+            _badFiles.Add(fileName);
             WarnOnce("invalid:" + fileName, $"[UIEditor] Could not read '{file}' as an image.");
             return null;
         }
@@ -359,53 +533,120 @@ internal static class SpriteApplier
         return texture;
     }
 
-    // Destroys cached textures/sprites for one file (or all when null). Callers revert first,
-    // so no Image is still showing them.
+    // Destroys cached textures/sprites for one file (or all when null) and forgets that it was
+    // missing/unreadable. Callers revert first, so no Image is still showing them.
     private static void ClearCaches(string fileName)
     {
-        foreach (var key in new List<string>(_sprites.Keys))
+        if (fileName == null)
         {
-            if (fileName != null && !key.StartsWith(fileName + "|"))
-                continue;
-            var sprite = _sprites[key];
-            if (sprite != null)
+            foreach (var byOriginal in _sprites.Values)
             {
-                _ourSprites.Remove(sprite.GetInstanceID());
-                UnityEngine.Object.Destroy(sprite);
+                foreach (var cached in byOriginal.Values)
+                    DestroyCached(cached);
             }
-            _sprites.Remove(key);
+            _sprites.Clear();
+
+            foreach (var texture in _textures.Values)
+            {
+                if (texture != null)
+                    UnityEngine.Object.Destroy(texture);
+            }
+            _textures.Clear();
+            _badFiles.Clear();
+            return;
         }
 
-        foreach (var key in new List<string>(_textures.Keys))
+        if (_sprites.TryGetValue(fileName, out var sprites))
         {
-            if (fileName != null && key != fileName)
-                continue;
-            if (_textures[key] != null)
-                UnityEngine.Object.Destroy(_textures[key]);
-            _textures.Remove(key);
+            foreach (var cached in sprites.Values)
+                DestroyCached(cached);
+            _sprites.Remove(fileName);
         }
+
+        if (_textures.TryGetValue(fileName, out var fileTexture))
+        {
+            if (fileTexture != null)
+                UnityEngine.Object.Destroy(fileTexture);
+            _textures.Remove(fileName);
+        }
+
+        _badFiles.Remove(fileName);
+    }
+
+    private static void DestroyCached(CachedSprite cached)
+    {
+        _ourSprites.Remove(cached.ReplacementId);
+        if (cached.Replacement != null)
+            UnityEngine.Object.Destroy(cached.Replacement);
+    }
+
+    /// <summary>
+    /// Replacements are built per original sprite instance and marked DontUnloadUnusedAsset, so
+    /// without this every original a scene ever showed would keep a replacement alive. Frees those
+    /// whose original is gone (unloaded with its scene) and that no Image still shows.
+    /// </summary>
+    private static void PruneReplacementSprites()
+    {
+        if (_sprites.Count == 0)
+            return;
+
+        _inUse.Clear();
+        foreach (var entry in _replaced.Values)
+            _inUse.Add(entry.ReplacementId);
+
+        foreach (var byOriginal in _sprites.Values)
+        {
+            _deadIds.Clear();
+            foreach (var pair in byOriginal)
+            {
+                var cached = pair.Value;
+                if ((cached.Original == null || cached.Replacement == null) && !_inUse.Contains(cached.ReplacementId))
+                    _deadIds.Add(pair.Key);
+            }
+
+            foreach (var id in _deadIds)
+            {
+                DestroyCached(byOriginal[id]);
+                byOriginal.Remove(id);
+            }
+        }
+
+        _deadIds.Clear();
+        _inUse.Clear();
     }
 
     private static void PruneDestroyed()
     {
-        var dead = new List<int>();
+        _deadIds.Clear();
         foreach (var pair in _replaced)
         {
             if (pair.Value.Image == null)
-                dead.Add(pair.Key);
+                _deadIds.Add(pair.Key);
         }
-        foreach (var id in dead)
+        foreach (var id in _deadIds)
             _replaced.Remove(id);
+        _deadIds.Clear();
     }
 
-    private static string CachedPath(Image image)
+    /// <param name="name">The Image's name, which the caller has already read.</param>
+    private static string GetCachedPath(Image image, string name)
     {
+        var transform = image.transform;
+        var parent = transform.parent;
+        var parentId = parent != null ? parent.GetInstanceID() : 0;
+        var rootId = parent != null ? transform.root.GetInstanceID() : transform.GetInstanceID();
+
         var id = image.GetInstanceID();
-        if (!_pathCache.TryGetValue(id, out var path))
+        if (_pathCache.TryGetValue(id, out var cached)
+            && cached.ParentId == parentId && cached.RootId == rootId && cached.Name == name)
         {
-            path = ObjectHelper.GetGameObjectPath(image.gameObject);
-            _pathCache[id] = path;
+            return cached.Path;
         }
+
+        var path = ObjectHelper.GetGameObjectPath(image.gameObject);
+        if (_pathCache.Count >= MaxCachedPaths)
+            _pathCache.Clear();
+        _pathCache[id] = new CachedPath { Path = path, Name = name, ParentId = parentId, RootId = rootId };
         return path;
     }
 

@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 #if IL2CPP
 using BepInEx.Unity.IL2CPP.Configuration;
@@ -36,7 +35,10 @@ internal sealed class UiEditorHotkeys
         if (shortcut.MainKey == KeyCode.None)
             return "(unbound)";
 
-        var parts = new List<string>(shortcut.Modifiers.Select(Describe)) { Describe(shortcut.MainKey) };
+        var parts = new List<string>();
+        foreach (var modifier in shortcut.Modifiers)
+            parts.Add(Describe(modifier));
+        parts.Add(Describe(shortcut.MainKey));
         return string.Join(" + ", parts.ToArray());
     }
 

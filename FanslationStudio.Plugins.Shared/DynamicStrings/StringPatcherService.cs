@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace FanslationStudio.Plugins.DynamicStrings;
 
@@ -16,6 +17,11 @@ namespace FanslationStudio.Plugins.DynamicStrings;
 public class StringPatcherService
 {
     private readonly Dictionary<string, Type> _cachedTypes = [];
+    // Many groups target methods of the same type, so look each type's members up once.
+    private readonly Dictionary<Type, List<MethodInfo>> _cachedMethods = [];
+    private readonly Dictionary<Type, List<ConstructorInfo>> _cachedConstructors = [];
+    // Shared by every .cctor group's static field rewrite.
+    private readonly Dictionary<Type, ValueShape> _valueShapes = [];
 
     public static IPluginLogger Logger;
     private static bool _enabled = false;
@@ -34,7 +40,7 @@ public class StringPatcherService
     private bool _patched = false;
     private string[] _pendingFilePaths;
 
-    public StringPatcherService(IPluginLogger logger, bool enabled, 
+    public StringPatcherService(IPluginLogger logger, bool enabled,
         Harmony harmony, string resourcePath, string filePattern, string bepinExRootPath, IYamlHelper yamlHelper)
     {
         Logger = logger;
@@ -84,12 +90,13 @@ public class StringPatcherService
             return []; // Return an empty list if no contracts are given
         }
 
+        // Ordinal: the order only affects logging, so there's no need for culture-aware sorting.
         return contracts
             .Where(c => DynamicStringSupport.IsSafeContract(c))
             .GroupBy(c => (c.Type, c.Method, GetParametersKey(c.Parameters)))
-            .OrderBy(g => g.Key.Type)
-            .ThenBy(g => g.Key.Method)
-            .ThenBy(g => g.Key.Item3) // GetParametersKey result
+            .OrderBy(g => g.Key.Type, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.Method, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.Item3, StringComparer.Ordinal) // GetParametersKey result
             .Select(group => new GroupedDynamicStringContracts
             {
                 Type = group.Key.Type,
@@ -131,20 +138,25 @@ public class StringPatcherService
         int skipCount = 0;
         int errorCount = 0;
 
+        // Groups can resolve to the same method (e.g. parameter names that match more than one
+        // overload loosely), so collect every method's contracts first and patch each once.
+        var pendingPatches = new List<PendingPatch>();
+        var pendingByMethod = new Dictionary<MethodBase, PendingPatch>();
+
         foreach (var contract in groupedContracts)
         {
-            // Get the type
-            var targetType = GetTargetType(contract);
-
-            if (targetType == null)
-            {
-                Logger.LogError($"Could not find type: {contract.Type}");
-                skipCount += contract.Contracts.Length;
-                continue;
-            }
-
             try
             {
+                // Get the type. Inside the try so one type that fails to load only costs its own group.
+                var targetType = GetTargetType(contract);
+
+                if (targetType == null)
+                {
+                    Logger.LogError($"Could not find type: {contract.Type}");
+                    skipCount += contract.Contracts.Length;
+                    continue;
+                }
+
                 // Find the method using different approaches based on the method type
                 MethodBase targetMethod = null;
 
@@ -153,37 +165,19 @@ public class StringPatcherService
                 {
                     // Replace static object values that match
                     // Because static constructor would have been called before IL Patch
-                    foreach (var fieldInfo in targetType.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
-                    {
-                        var value = fieldInfo.GetValue(null);
-                        if (value == null)
-                            continue;
-
-                        // If its a string replace it straight out
-                        if (value is string originalValue)
-                        {
-                            string newValue = ReplaceStringIfMatches(originalValue, contract.Contracts);
-                            if (originalValue != newValue)
-                                fieldInfo.SetValue(null, newValue);
-                        }
-                        else
-                        {
-                            ProcessComplexTypeValue(value, contract.Contracts);
-                        }
-                    }
-
-                    continue; //They need to be patched via fields above because static constructor called before patch                   
+                    ReplaceInStaticFields(targetType, contract.Contracts);
+                    continue; //They need to be patched via fields above because static constructor called before patch
                 }
-                else if (contract.Method == ".ctor")
+
+                // Remove empty parameters from deserialization
+                var expectedParameters = (contract.Parameters ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToArray();
+
+                if (contract.Method == ".ctor")
                 {
                     // For instance constructors, try to find the one with matching strings
-                    var constructors = AccessTools.GetDeclaredConstructors(targetType)
-                        .Where(m => !m.IsStatic)
-                        .ToList();
-
-                    foreach (var method in constructors)
+                    foreach (var method in GetConstructors(targetType))
                     {
-                        if (HasMatchingParameters(contract.Parameters, method))
+                        if (HasMatchingParameters(expectedParameters, method))
                         {
                             targetMethod = method;
                             break;
@@ -193,13 +187,9 @@ public class StringPatcherService
                 else
                 {
                     // Regular methods
-                    var methods = AccessTools.GetDeclaredMethods(targetType)
-                        .Where(m => m.Name == contract.Method)
-                        .ToList();
-
-                    foreach (var method in methods)
+                    foreach (var method in GetMethods(targetType))
                     {
-                        if (HasMatchingParameters(contract.Parameters, method))
+                        if (method.Name == contract.Method && HasMatchingParameters(expectedParameters, method))
                         {
                             targetMethod = method;
                             break;
@@ -214,18 +204,39 @@ public class StringPatcherService
                     continue;
                 }
 
-                // Apply the patch
-                //_harmony.Patch(targetMethod, transpiler: StringPatcherTranspiler.CreateTranspilerMethod(contract.Contracts, targetMethod));
-                _harmony.Patch(targetMethod, transpiler: StringTranspiler.CreateTranspilerMethod(contract.Contracts));
+                if (!pendingByMethod.TryGetValue(targetMethod, out var pending))
+                {
+                    pending = new PendingPatch(targetMethod, contract.Type, contract.Method);
+                    pendingByMethod[targetMethod] = pending;
+                    pendingPatches.Add(pending);
+                }
 
-                successCount++;
-                Logger.LogDebug($"Successfully patched: {contract.Type}.{contract.Method}");
+                pending.Contracts.AddRange(contract.Contracts);
+                pending.GroupCount++;
             }
             catch (Exception ex)
             {
                 errorCount++;
                 badContractErrors.Add($"Error patching {contract.Type} {contract.Method}\n{ex}");
                 //badContractErrors.Add($"\"{contract.Type}.{contract.Method}\",");
+            }
+        }
+
+        foreach (var pending in pendingPatches)
+        {
+            try
+            {
+                // Apply the patch
+                //_harmony.Patch(targetMethod, transpiler: StringPatcherTranspiler.CreateTranspilerMethod(contract.Contracts, targetMethod));
+                _harmony.Patch(pending.Method, transpiler: StringTranspiler.CreateTranspilerMethod(pending.Method, pending.Contracts));
+
+                successCount += pending.GroupCount;
+                Logger.LogDebug($"Successfully patched: {pending.Type}.{pending.Name}");
+            }
+            catch (Exception ex)
+            {
+                errorCount += pending.GroupCount;
+                badContractErrors.Add($"Error patching {pending.Type} {pending.Name}\n{ex}");
             }
         }
 
@@ -255,36 +266,46 @@ public class StringPatcherService
         return targetType;
     }
 
-    private bool HasMatchingParameters(string[] originalParameters, MethodBase methodBase)
+    private List<MethodInfo> GetMethods(Type type)
     {
-        bool match = true;
-        var methodParameters = methodBase.GetParameters().Select(p => p.ParameterType).ToArray();
-        var methodParameters2 = methodBase.GetParameters().Select(p => p.ParameterType.ToString()).ToArray();
-
-        // Remove empty parameters from deserialization
-        originalParameters = originalParameters.Where(o => !string.IsNullOrWhiteSpace(o)).ToArray();
-
-        if (originalParameters.Length == methodParameters.Length)
+        if (!_cachedMethods.TryGetValue(type, out var methods))
         {
-            for (int i = 0; i < methodParameters.Length; i++)
-            {
-                // Check if the original parameter matches the method parameter
-                if (!IsParameterMatch(originalParameters[i], methodParameters[i]))
-                {
-                    match = false;
-                    break;
-                }
-            }
+            methods = AccessTools.GetDeclaredMethods(type);
+            _cachedMethods[type] = methods;
         }
-        else
-            match = false;
 
-        //Logger.LogWarning($"Attempting to match method: {methodBase.Name}");
-        //Logger.LogWarning($"Original Parameter Length: {originalParameters.Length} Method: {methodParameters.Length}");
-        //Logger.LogWarning($"Original Parameters: {string.Join(", ", originalParameters)}");
-        //Logger.LogWarning($"Method Parameters: {string.Join(", ", methodParameters2)}");
-        //Logger.LogWarning(match);
-        return match;
+        return methods;
+    }
+
+    private List<ConstructorInfo> GetConstructors(Type type)
+    {
+        if (!_cachedConstructors.TryGetValue(type, out var constructors))
+        {
+            constructors = AccessTools.GetDeclaredConstructors(type)
+                .Where(m => !m.IsStatic)
+                .ToList();
+            _cachedConstructors[type] = constructors;
+        }
+
+        return constructors;
+    }
+
+    // expectedParameters must already have the empty entries from deserialization removed.
+    private bool HasMatchingParameters(string[] expectedParameters, MethodBase methodBase)
+    {
+        var methodParameters = methodBase.GetParameters();
+
+        if (expectedParameters.Length != methodParameters.Length)
+            return false;
+
+        for (int i = 0; i < methodParameters.Length; i++)
+        {
+            // Check if the original parameter matches the method parameter
+            if (!IsParameterMatch(expectedParameters[i], methodParameters[i].ParameterType))
+                return false;
+        }
+
+        return true;
     }
 
     private bool IsParameterMatch(string originalParamType, Type methodParamType)
@@ -322,303 +343,325 @@ public class StringPatcherService
         return originalParamType.EndsWith(methodParamType.Name);
     }
 
-    private string ReplaceStringIfMatches(string value, DynamicStringContract[] contracts)
+    private void ReplaceInStaticFields(Type targetType, DynamicStringContract[] contracts)
     {
-        if (string.IsNullOrEmpty(value)) return value;
+        var rewriter = new StaticValueRewriter(new StringReplacementLookup(contracts), _valueShapes);
 
-        foreach (var contract in contracts)
+        foreach (var fieldInfo in targetType.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
         {
-            StringTranspiler.PrepareDynamicString(contract.Raw, out string preparedRaw, out string preparedRaw2);
-            StringTranspiler.PrepareDynamicString(contract.Translation, out string preparedTrans, out string preparedTrans2);
+            // Constants can't be set (and were inlined into their callers anyway).
+            if (fieldInfo.IsLiteral)
+                continue;
 
-            if (value == preparedRaw)
+            var value = fieldInfo.GetValue(null);
+            if (value == null)
+                continue;
+
+            // If its a string replace it straight out
+            if (value is string originalValue)
             {
-                return preparedTrans;
+                string newValue = rewriter.Lookup.Replace(originalValue);
+                if (originalValue != newValue)
+                    fieldInfo.SetValue(null, newValue);
             }
-            else if (value == preparedRaw2
-                || StringTranspiler.StripCommas(value) == StringTranspiler.StripCommas(preparedRaw))
+            else
             {
-                return preparedTrans2;
+                rewriter.Visit(value, 0);
             }
         }
-
-        return value;
     }
 
-    private void ProcessGenericCollection(object collection, DynamicStringContract[] contracts)
+    private sealed class PendingPatch(MethodBase method, string type, string name)
     {
-        if (collection == null) return;
+        public MethodBase Method { get; } = method;
+        public string Type { get; } = type;
+        public string Name { get; } = name;
+        public List<DynamicStringContract> Contracts { get; } = [];
+        public int GroupCount { get; set; }
+    }
 
-        Type collectionType = collection.GetType();
+    /// <summary>
+    /// A group's raw -> translation lookup for the static field rewrite, built once per group
+    /// rather than re-preparing every contract for every string visited. Matches exactly as a
+    /// linear scan of the contracts would: the first contract whose prepared raw, comma-normalised
+    /// raw or comma-stripped raw matches wins, giving its translation when the prepared raw itself
+    /// matched and its comma-normalised translation otherwise.
+    /// </summary>
+    private sealed class StringReplacementLookup
+    {
+        private readonly string[] _raw;
+        private readonly string[] _translation;
+        private readonly string[] _translationAlt;
+        // Each maps to the index of the first contract with that key.
+        private readonly Dictionary<string, int> _byRaw = [];
+        private readonly Dictionary<string, int> _byRawAlt = [];
+        private readonly Dictionary<string, int> _byStrippedRaw = [];
 
-        // Handle dictionaries with reflection regardless of key/value types
-        if (IsDictionaryType(collectionType))
+        public StringReplacementLookup(DynamicStringContract[] contracts)
         {
-            ProcessDictionary(collection, contracts);
+            _raw = new string[contracts.Length];
+            _translation = new string[contracts.Length];
+            _translationAlt = new string[contracts.Length];
+
+            for (var i = 0; i < contracts.Length; i++)
+            {
+                var contract = contracts[i];
+                if (contract?.Raw == null || contract.Translation == null)
+                    continue;
+
+                StringTranspiler.PrepareDynamicString(contract.Raw, out string preparedRaw, out string preparedRaw2);
+                StringTranspiler.PrepareDynamicString(contract.Translation, out string preparedTrans, out string preparedTrans2);
+
+                _raw[i] = preparedRaw;
+                _translation[i] = preparedTrans;
+                _translationAlt[i] = preparedTrans2;
+
+                AddFirst(_byRaw, preparedRaw, i);
+                AddFirst(_byRawAlt, preparedRaw2, i);
+                AddFirst(_byStrippedRaw, StringTranspiler.StripCommas(preparedRaw), i);
+            }
         }
-        // Handle list-like collections
-        else if (IsListType(collectionType))
+
+        private static void AddFirst(Dictionary<string, int> lookup, string key, int index)
         {
-            ProcessList(collection, contracts);
+            if (!lookup.ContainsKey(key))
+                lookup[key] = index;
         }
-        // Handle other generic types that might contain strings
-        else
+
+        public string Replace(string value)
         {
-            // Process properties of the generic object
-            foreach (var prop in collectionType.GetProperties(BindingFlags.Instance | BindingFlags.Public))
+            if (string.IsNullOrEmpty(value)) return value;
+
+            var index = int.MaxValue;
+            if (_byRaw.TryGetValue(value, out var i))
+                index = i;
+            if (_byRawAlt.TryGetValue(value, out i) && i < index)
+                index = i;
+
+            var stripped = value.IndexOf(',') >= 0 || value.IndexOf('，') >= 0 ? StringTranspiler.StripCommas(value) : value;
+            if (_byStrippedRaw.TryGetValue(stripped, out i) && i < index)
+                index = i;
+
+            if (index == int.MaxValue)
+                return value;
+
+            return value == _raw[index] ? _translation[index] : _translationAlt[index];
+        }
+    }
+
+    private enum ValueKind
+    {
+        // Nothing worth walking: primitives, enums, strings (handled by the parent), Unity
+        // objects, delegates and reflection objects.
+        Skip,
+        Array,
+        Dictionary,
+        List,
+        // Any other collection: only its elements' contents can be changed.
+        Collection,
+        Fields,
+    }
+
+    private sealed class ValueShape(ValueKind kind, FieldInfo[] fields = null)
+    {
+        public ValueKind Kind { get; } = kind;
+        public FieldInfo[] Fields { get; } = fields;
+    }
+
+    /// <summary>
+    /// Walks the object graph under a static field, replacing matching strings in place. Only
+    /// fields are walked - never property getters, which can have side effects (e.g. Unity's
+    /// MeshFilter.mesh clones the mesh); auto-properties are covered by their backing fields.
+    /// Each object is visited once (so cycles terminate) and the depth is capped.
+    /// </summary>
+    private sealed class StaticValueRewriter(StringReplacementLookup lookup, Dictionary<Type, ValueShape> shapes)
+    {
+        private const int MaxDepth = 32;
+        private const BindingFlags InstanceFields = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+
+        private readonly HashSet<object> _visited = new(ReferenceComparer.Instance);
+
+        public StringReplacementLookup Lookup { get; } = lookup;
+
+        public void Visit(object value, int depth)
+        {
+            if (value == null || depth > MaxDepth)
+                return;
+
+            var type = value.GetType();
+            var shape = GetShape(type);
+            if (shape.Kind == ValueKind.Skip)
+                return;
+
+            // Boxed value types are fresh copies, so only reference types can repeat.
+            if (!type.IsValueType && !_visited.Add(value))
+                return;
+
+            switch (shape.Kind)
+            {
+                case ValueKind.Array:
+                    VisitArray((Array)value, depth);
+                    break;
+                case ValueKind.Dictionary:
+                    VisitDictionary((IDictionary)value, depth);
+                    break;
+                case ValueKind.List:
+                    VisitList((IList)value, depth);
+                    break;
+                case ValueKind.Collection:
+                    VisitCollection((IEnumerable)value, depth);
+                    break;
+                case ValueKind.Fields:
+                    VisitFields(value, shape.Fields, depth);
+                    break;
+            }
+        }
+
+        private void VisitArray(Array array, int depth)
+        {
+            if (array.Length == 0)
+                return;
+
+            if (array.Rank > 1)
+            {
+                // Handle multi-dimensional arrays
+                int[] lengths = new int[array.Rank];
+                for (int i = 0; i < lengths.Length; i++)
+                    lengths[i] = array.GetLength(i);
+
+                foreach (int[] indices in GetAllIndices(lengths))
+                    VisitArrayElement(array, array.GetValue(indices), indices, depth);
+            }
+            else
+            {
+                for (int i = 0; i < array.Length; i++)
+                    VisitArrayElement(array, array.GetValue(i), [i], depth);
+            }
+        }
+
+        private void VisitArrayElement(Array array, object element, int[] indices, int depth)
+        {
+            if (element is string stringValue)
+            {
+                string newValue = Lookup.Replace(stringValue);
+                if (stringValue != newValue)
+                    array.SetValue(newValue, indices);
+            }
+            else if (element != null)
+            {
+                Visit(element, depth + 1);
+            }
+        }
+
+        private void VisitDictionary(IDictionary dictionary, int depth)
+        {
+            // Copy the keys first, since entries may be replaced below.
+            var keys = new List<object>();
+            foreach (var key in dictionary.Keys)
+                keys.Add(key);
+
+            foreach (var key in keys)
             {
                 try
                 {
-                    object propValue = prop.GetValue(collection);
-                    if (propValue is string stringValue && prop.CanWrite)
+                    // Process the key if it's a string
+                    object processedKey = key is string keyString ? Lookup.Replace(keyString) : key;
+
+                    object value = dictionary[key];
+                    object processedValue = value;
+                    bool valueChanged = false;
+
+                    if (value is string valueString)
                     {
-                        string newValue = ReplaceStringIfMatches(stringValue, contracts);
-                        if (stringValue != newValue)
+                        string newValue = Lookup.Replace(valueString);
+                        if (newValue != valueString)
                         {
-                            prop.SetValue(collection, newValue);
+                            processedValue = newValue;
+                            valueChanged = true;
                         }
                     }
-                    else if (propValue != null)
+                    else if (value != null)
                     {
-                        // Recursively process complex property values
-                        ProcessComplexTypeValue(propValue, contracts);
+                        // Recursively process the value if it's a complex type
+                        Visit(value, depth + 1);
+                    }
+
+                    // If the key changed, we need to remove the old key and add a new entry
+                    if (!key.Equals(processedKey))
+                    {
+                        dictionary.Remove(key);
+                        dictionary[processedKey] = processedValue;
+                    }
+                    // If only the value changed, just update it
+                    else if (valueChanged)
+                    {
+                        dictionary[key] = processedValue;
                     }
                 }
                 catch
                 {
-                    // Skip properties that throw exceptions
+                    // Skip entries that can't be read or written (e.g. read-only dictionaries)
                 }
             }
         }
-    }
 
-    private bool IsDictionaryType(Type type)
-    {
-        if (type.IsGenericType)
+        private void VisitList(IList list, int depth)
         {
-            Type genericTypeDef = type.GetGenericTypeDefinition();
-            return genericTypeDef == typeof(Dictionary<,>) ||
-                   genericTypeDef == typeof(IDictionary<,>) ||
-                   type.GetInterfaces().Any(i => i.IsGenericType &&
-                                             i.GetGenericTypeDefinition() == typeof(IDictionary<,>));
-        }
-        return false;
-    }
-
-    private bool IsListType(Type type)
-    {
-        if (type.IsGenericType)
-        {
-            Type genericTypeDef = type.GetGenericTypeDefinition();
-            return genericTypeDef == typeof(List<>) ||
-                   genericTypeDef == typeof(IList<>) ||
-                   genericTypeDef == typeof(ICollection<>) ||
-                   type.GetInterfaces().Any(i => i.IsGenericType &&
-                                            (i.GetGenericTypeDefinition() == typeof(IList<>) ||
-                                             i.GetGenericTypeDefinition() == typeof(ICollection<>)));
-        }
-        return false;
-    }
-
-    private void ProcessDictionary(object dictionary, DynamicStringContract[] contracts)
-    {
-        // Get the generic parameters of the dictionary
-        Type dictType = dictionary.GetType();
-        Type[] genericArgs = dictType.GetGenericArguments();
-        Type keyType = genericArgs[0];
-        //Type valueType = genericArgs[1];
-
-        // Get dictionary entries
-        var entriesProperty = dictType.GetProperty("Keys");
-        var keys = (IEnumerable)entriesProperty.GetValue(dictionary);
-        var keysToProcess = new List<object>();
-
-        // Get the keys and check if we need to replace any
-        foreach (var key in keys)
-        {
-            keysToProcess.Add(key);
-        }
-
-        // Dynamically invoke item getter and setter
-        var itemProperty = dictType.GetProperty("Item");
-
-        // Process each key and value
-        foreach (var key in keysToProcess)
-        {
-            // Process the key if it's a string
-            object processedKey = key;
-            if (key is string keyString)
+            for (int i = 0; i < list.Count; i++)
             {
-                processedKey = ReplaceStringIfMatches(keyString, contracts);
-            }
-
-            // Get the value
-            object value = itemProperty.GetValue(dictionary, [key]);
-            bool valueChanged = false;
-            object processedValue = value;
-
-            // Process the value based on its type
-            if (value is string valueString)
-            {
-                string newValue = ReplaceStringIfMatches(valueString, contracts);
-                if (newValue != valueString)
+                try
                 {
-                    processedValue = newValue;
-                    valueChanged = true;
-                }
-            }
-            else if (value != null)
-            {
-                // Recursively process the value if it's a complex type
-                ProcessComplexTypeValue(value, contracts);
-            }
-
-            // If the key changed, we need to remove the old key and add a new entry
-            if (!key.Equals(processedKey))
-            {
-                // Remove old entry
-                var removeMethod = dictType.GetMethod("Remove", [keyType]);
-                removeMethod.Invoke(dictionary, [key]);
-
-                // Add new entry
-                itemProperty.SetValue(dictionary, processedValue, [processedKey]);
-            }
-            // If only the value changed, just update it
-            else if (valueChanged)
-            {
-                itemProperty.SetValue(dictionary, processedValue, [key]);
-            }
-        }
-    }
-
-    private void ProcessList(object list, DynamicStringContract[] contracts)
-    {
-        // Get the generic parameter of the list
-        Type listType = list.GetType();
-        Type[] genericArgs = listType.GetGenericArguments();
-        Type elementType = genericArgs[0];
-
-        // If elements are strings, process them directly
-        if (elementType == typeof(string))
-        {
-            var countProperty = listType.GetProperty("Count");
-            int count = (int)countProperty.GetValue(list);
-            var indexerProperty = listType.GetProperty("Item");
-
-            for (int i = 0; i < count; i++)
-            {
-                string value = (string)indexerProperty.GetValue(list, [i]);
-                string newValue = ReplaceStringIfMatches(value, contracts);
-
-                if (value != newValue)
-                {
-                    indexerProperty.SetValue(list, newValue, [i]);
-                }
-            }
-        }
-        // Otherwise, process each element recursively
-        else
-        {
-            // Get IEnumerator to loop through the list
-            var getEnumeratorMethod = listType.GetMethod("GetEnumerator");
-            var enumerator = getEnumeratorMethod.Invoke(list, null);
-            var enumeratorType = enumerator.GetType();
-            var moveNextMethod = enumeratorType.GetMethod("MoveNext");
-            var currentProperty = enumeratorType.GetProperty("Current");
-
-            while ((bool)moveNextMethod.Invoke(enumerator, null))
-            {
-                var element = currentProperty.GetValue(enumerator);
-                if (element != null)
-                {
-                    ProcessComplexTypeValue(element, contracts);
-                }
-            }
-        }
-    }
-
-    private void ProcessComplexTypeValue(object value, DynamicStringContract[] contracts)
-    {
-        Type valueType = value.GetType();
-
-        // Handle arrays
-        if (valueType.IsArray)
-        {
-            Type elementType = valueType.GetElementType();
-            Array array = (Array)value;
-
-            if (valueType.GetArrayRank() > 1)
-            {
-                // Handle multi-dimensional arrays
-                int[] lengths = new int[valueType.GetArrayRank()];
-                for (int i = 0; i < lengths.Length; i++)
-                {
-                    lengths[i] = array.GetLength(i);
-                }
-
-                foreach (int[] indices in GetAllIndices(lengths))
-                {
-                    object element = array.GetValue(indices);
+                    var element = list[i];
                     if (element is string stringValue)
                     {
-                        string newValue = ReplaceStringIfMatches(stringValue, contracts);
-                        if (stringValue != newValue)
-                        {
-                            array.SetValue(newValue, indices);
-                        }
+                        string newValue = Lookup.Replace(stringValue);
+                        if (stringValue != newValue && !list.IsReadOnly)
+                            list[i] = newValue;
                     }
                     else if (element != null)
                     {
-                        ProcessComplexTypeValue(element, contracts);
+                        Visit(element, depth + 1);
                     }
                 }
-            }
-            else if (elementType == typeof(string))
-            {
-                // Process string array
-                for (int i = 0; i < array.Length; i++)
+                catch
                 {
-                    string originalValue = (string)array.GetValue(i);
-                    string newValue = ReplaceStringIfMatches(originalValue, contracts);
+                    // Skip elements that can't be read or written
+                }
+            }
+        }
 
-                    if (originalValue != newValue)
-                        array.SetValue(newValue, i);
-                }
-            }
-            else
+        private void VisitCollection(IEnumerable collection, int depth)
+        {
+            try
             {
-                // Process array of complex types
-                for (int i = 0; i < array.Length; i++)
+                foreach (var element in collection)
                 {
-                    object element = array.GetValue(i);
-                    if (element != null)
-                        ProcessComplexTypeValue(element, contracts);
+                    if (element != null && element is not string)
+                        Visit(element, depth + 1);
                 }
             }
+            catch
+            {
+                // Skip collections that can't be enumerated
+            }
         }
-        // Handle generic collections
-        else if (valueType.IsGenericType)
+
+        private void VisitFields(object value, FieldInfo[] fields, int depth)
         {
-            ProcessGenericCollection(value, contracts);
-        }
-        // Handle other complex types
-        else if (!valueType.IsPrimitive && !valueType.IsEnum)
-        {
-            // Process regular fields and properties
-            foreach (var field in valueType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            foreach (var field in fields)
             {
                 try
                 {
                     var fieldValue = field.GetValue(value);
                     if (fieldValue is string stringValue)
                     {
-                        string newValue = ReplaceStringIfMatches(stringValue, contracts);
+                        string newValue = Lookup.Replace(stringValue);
                         if (stringValue != newValue)
                             field.SetValue(value, newValue);
                     }
                     else if (fieldValue != null)
                     {
-                        ProcessComplexTypeValue(fieldValue, contracts);
+                        Visit(fieldValue, depth + 1);
                     }
                 }
                 catch
@@ -626,57 +669,116 @@ public class StringPatcherService
                     // Skip fields that throw exceptions
                 }
             }
+        }
 
-            foreach (var prop in valueType.GetProperties(BindingFlags.Instance | BindingFlags.Public))
+        private ValueShape GetShape(Type type)
+        {
+            if (!shapes.TryGetValue(type, out var shape))
             {
-                if (prop.CanRead && prop.CanWrite)
+                shape = CreateShape(type);
+                shapes[type] = shape;
+            }
+
+            return shape;
+        }
+
+        private static ValueShape CreateShape(Type type)
+        {
+            if (IsLeaf(type)
+                || typeof(Delegate).IsAssignableFrom(type)
+                || typeof(MemberInfo).IsAssignableFrom(type)
+                || typeof(Assembly).IsAssignableFrom(type)
+                || typeof(Module).IsAssignableFrom(type)
+                || IsUnityObject(type))
+                return new ValueShape(ValueKind.Skip);
+
+            if (type.IsArray)
+                return new ValueShape(IsLeaf(type.GetElementType()) && type.GetElementType() != typeof(string) ? ValueKind.Skip : ValueKind.Array);
+
+            if (typeof(IDictionary).IsAssignableFrom(type))
+                return new ValueShape(ValueKind.Dictionary);
+
+            if (typeof(IList).IsAssignableFrom(type))
+                return new ValueShape(ValueKind.List);
+
+            if (typeof(ICollection).IsAssignableFrom(type) || IsGenericCollection(type))
+                return new ValueShape(ValueKind.Collection);
+
+            // Walk the base types explicitly, since GetFields doesn't return private fields
+            // declared on a base class (e.g. an inherited auto-property's backing field).
+            var fields = new List<FieldInfo>();
+            for (var current = type; current != null && current != typeof(object) && current != typeof(ValueType); current = current.BaseType)
+            {
+                foreach (var field in current.GetFields(InstanceFields))
                 {
-                    try
+                    if (field.FieldType == typeof(string) || !IsLeaf(field.FieldType))
+                        fields.Add(field);
+                }
+            }
+
+            return new ValueShape(fields.Count > 0 ? ValueKind.Fields : ValueKind.Skip, [.. fields]);
+        }
+
+        private static bool IsLeaf(Type type)
+        {
+            return type.IsPrimitive || type.IsEnum || type.IsPointer || type == typeof(string) || type == typeof(decimal);
+        }
+
+        private static bool IsGenericCollection(Type type)
+        {
+            foreach (var i in type.GetInterfaces())
+            {
+                if (i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ICollection<>))
+                    return true;
+            }
+
+            return false;
+        }
+
+        // By name so Shared never touches Unity's own types (see IPrefabTextFinder).
+        private static bool IsUnityObject(Type type)
+        {
+            for (var current = type; current != null; current = current.BaseType)
+            {
+                if (current.FullName == "UnityEngine.Object")
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static IEnumerable<int[]> GetAllIndices(int[] lengths)
+        {
+            int[] indices = new int[lengths.Length];
+            while (true)
+            {
+                yield return (int[])indices.Clone();
+
+                for (int i = lengths.Length - 1; i >= 0; i--)
+                {
+                    if (indices[i] < lengths[i] - 1)
                     {
-                        object propValue = prop.GetValue(value);
-                        if (propValue is string stringValue)
-                        {
-                            string newValue = ReplaceStringIfMatches(stringValue, contracts);
-                            if (stringValue != newValue)
-                            {
-                                prop.SetValue(value, newValue);
-                            }
-                        }
-                        else if (propValue != null)
-                        {
-                            ProcessComplexTypeValue(propValue, contracts);
-                        }
+                        indices[i]++;
+                        break;
                     }
-                    catch
+                    else
                     {
-                        // Skip properties that throw exceptions
+                        if (i == 0)
+                            yield break;
+                        indices[i] = 0;
                     }
                 }
             }
         }
     }
 
-    private IEnumerable<int[]> GetAllIndices(int[] lengths)
+    // Reference identity, so objects that override Equals/GetHashCode are still each visited once.
+    private sealed class ReferenceComparer : IEqualityComparer<object>
     {
-        int[] indices = new int[lengths.Length];
-        while (true)
-        {
-            yield return (int[])indices.Clone();
+        public static readonly ReferenceComparer Instance = new();
 
-            for (int i = lengths.Length - 1; i >= 0; i--)
-            {
-                if (indices[i] < lengths[i] - 1)
-                {
-                    indices[i]++;
-                    break;
-                }
-                else
-                {
-                    if (i == 0)
-                        yield break;
-                    indices[i] = 0;
-                }
-            }
-        }
+        public new bool Equals(object x, object y) => ReferenceEquals(x, y);
+
+        public int GetHashCode(object obj) => RuntimeHelpers.GetHashCode(obj);
     }
 }

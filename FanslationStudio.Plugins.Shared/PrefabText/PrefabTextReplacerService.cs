@@ -34,6 +34,15 @@ public class PrefabTextReplacerService
     private readonly IPrefabTextFinder _elementFinder;
 
     private readonly Dictionary<string, string> _replacements = [];
+    // Shortest/longest key, so the text setter can reject most strings without hashing them.
+    private int _minKeyLength = int.MaxValue;
+    private int _maxKeyLength = 0;
+    // Prefab assets already processed by an asset load hook, by instance ID. Weak, so this never
+    // keeps an asset alive; an asset unloaded and loaded again gets a new wrapper object, which
+    // fails the ReferenceEquals check and is processed again.
+    private readonly Dictionary<int, WeakReference> _processedAssets = [];
+    private int _processedAssetsPruneAt = MinProcessedAssetsPruneAt;
+    private const int MinProcessedAssetsPruneAt = 256;
     // Per component type: the serialized text field and (optionally) the public text property.
     // A null entry means the type has no text field and is skipped.
     private readonly Dictionary<Type, TextAccessor> _accessors = [];
@@ -116,7 +125,10 @@ public class PrefabTextReplacerService
             // Keys are stored as dumped (see PrefabTextDumperService.ExtractTextFromGameObject):
             // newlines escaped as "\n" and carriage returns removed. Do not trim - some of the
             // original strings rely on their spacing.
-            _replacements[contract.Raw.Replace("\\n", "\n")] = contract.Result.Replace("\\n", "\n");
+            var key = contract.Raw.Replace("\\n", "\n");
+            _replacements[key] = contract.Result.Replace("\\n", "\n");
+            _minKeyLength = Math.Min(_minKeyLength, key.Length);
+            _maxKeyLength = Math.Max(_maxKeyLength, key.Length);
         }
 
         Logger.LogMessage($"{_replacements.Count} prefab text replacements loaded so far");
@@ -206,8 +218,7 @@ public class PrefabTextReplacerService
             if (_instance == null || string.IsNullOrEmpty(value))
                 return;
 
-            var key = value.IndexOf('\r') >= 0 ? value.Replace("\r", "") : value;
-            if (_instance._replacements.TryGetValue(key, out var replacement))
+            if (_instance.TryGetReplacement(value, out var replacement))
                 value = replacement;
         }
         catch
@@ -238,7 +249,9 @@ public class PrefabTextReplacerService
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
         // Covers scene objects and any prefabs loaded as scene dependencies (i.e. referenced
-        // from serialized fields rather than loaded through Resources/AssetBundle).
+        // from serialized fields rather than loaded through Resources/AssetBundle). Live text is
+        // also caught by the OnEnable hook, but those prefabs are never enabled or passed to an
+        // asset load hook, so the sweep is still needed - it only visits text components.
         ReplaceInAllLoadedObjects();
     }
 
@@ -247,13 +260,13 @@ public class PrefabTextReplacerService
         try
         {
             var count = 0;
-            foreach (var gameObject in _elementFinder.FindAllGameObjectsInResources())
+            // Every loaded text/input field component, filtered by type in the engine rather than walking
+            // every GameObject's components.
+            foreach (var component in _elementFinder.FindAllTextComponentsInResources())
             {
-                // Children are handled via their root's GetComponentsInChildren.
-                if (gameObject == null || gameObject.transform.parent != null)
-                    continue;
-
-                count += ReplaceInGameObject(gameObject);
+                // Loaded prefab assets aren't part of any scene; instances living in a scene are.
+                if (component != null && ReplaceText(component, component.gameObject.scene.IsValid()))
+                    count++;
             }
 
             if (count > 0)
@@ -286,17 +299,65 @@ public class PrefabTextReplacerService
         if (gameObject == null)
             return 0;
 
-        var count = 0;
         // Loaded prefab assets aren't part of any scene; instances living in a scene are.
         var isLive = gameObject.scene.IsValid();
 
-        foreach (var component in _elementFinder.GetComponentsInChildren(gameObject, true))
+        // Resources.Load etc. hand back the same cached asset on every call, and an asset's text
+        // only needs replacing once. Live instances can be changed by the game, so always redo them.
+        if (!isLive && !MarkAssetProcessed(gameObject))
+            return 0;
+
+        var count = 0;
+        foreach (var component in _elementFinder.GetTextComponentsInChildren(gameObject, true))
         {
             if (component != null && ReplaceText(component, isLive))
                 count++;
         }
 
         return count;
+    }
+
+    // False if this exact asset object has already been processed.
+    private bool MarkAssetProcessed(GameObject gameObject)
+    {
+        var instanceId = gameObject.GetInstanceID();
+        if (_processedAssets.TryGetValue(instanceId, out var processed) && ReferenceEquals(processed.Target, gameObject))
+            return false;
+
+        _processedAssets[instanceId] = new WeakReference(gameObject);
+
+        if (_processedAssets.Count >= _processedAssetsPruneAt)
+        {
+            var dead = new List<int>();
+            foreach (var entry in _processedAssets)
+            {
+                if (!entry.Value.IsAlive)
+                    dead.Add(entry.Key);
+            }
+
+            foreach (var key in dead)
+                _processedAssets.Remove(key);
+
+            _processedAssetsPruneAt = Math.Max(MinProcessedAssetsPruneAt, _processedAssets.Count * 2);
+        }
+
+        return true;
+    }
+
+    private bool TryGetReplacement(string text, out string replacement)
+    {
+        replacement = null;
+
+        // Keys never contain '\r', so stripping it can only shorten the text: too short can be
+        // rejected straight away, too long only once any '\r's are gone.
+        if (text.Length < _minKeyLength)
+            return false;
+
+        var key = text.IndexOf('\r') >= 0 ? text.Replace("\r", "") : text;
+        if (key.Length < _minKeyLength || key.Length > _maxKeyLength)
+            return false;
+
+        return _replacements.TryGetValue(key, out replacement);
     }
 
     private bool ReplaceText(Component component, bool isLive)
@@ -308,7 +369,7 @@ public class PrefabTextReplacerService
         if (accessor.Field.GetValue(component) is not string text || string.IsNullOrEmpty(text))
             return false;
 
-        if (!_replacements.TryGetValue(text.Replace("\r", ""), out var replacement) || replacement == text)
+        if (!TryGetReplacement(text, out var replacement) || replacement == text)
             return false;
 
         // Live objects have to go through the text property so TMP/UGUI mark themselves dirty

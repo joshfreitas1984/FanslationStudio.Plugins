@@ -135,6 +135,8 @@ internal sealed class SpriteTab : IEditorTab
         EditorWindow.SetStatus("Unsaved sprite changes discarded.", warning: worthSaving);
     }
 
+    /// <summary>Rebuilds every widget. Only for structural changes (e.g. a new thumbnail); toggles
+    /// update their own button in place.</summary>
     private void Render()
     {
         _panel.Clear();
@@ -156,7 +158,7 @@ internal sealed class SpriteTab : IEditorTab
 
         _panel.Label("Only when sprite is", 0, y, LabelWidth, RowHeight);
         var useCurrentWidth = _original != null ? 96f : 0f;
-        _panel.Input(_working.OriginalSprite, LabelWidth, y, width - LabelWidth - useCurrentWidth - (useCurrentWidth > 0 ? Gap : 0), RowHeight, text =>
+        var originalInput = _panel.Input(_working.OriginalSprite, LabelWidth, y, width - LabelWidth - useCurrentWidth - (useCurrentWidth > 0 ? Gap : 0), RowHeight, text =>
         {
             _working.OriginalSprite = string.IsNullOrWhiteSpace(text) ? null : text.Trim();
             MarkDirty();
@@ -167,7 +169,8 @@ internal sealed class SpriteTab : IEditorTab
             {
                 _working.OriginalSprite = _original.name;
                 MarkDirty();
-                Render();
+                // Only that field shows it, so update it in place rather than re-rendering.
+                _panel.SetInputText(originalInput, _working.OriginalSprite);
             }, UiPanel.MutedButtonColor);
         }
         y += RowStep;
@@ -188,11 +191,13 @@ internal sealed class SpriteTab : IEditorTab
             MarkDirty();
         }, "optional description");
         var enabled = _working.IsEnabled();
-        _panel.Button($"Rule enabled: {(enabled ? "On" : "Off")}", width - 146, y, 146, RowHeight, () =>
+        UiButton enabledButton = null;
+        enabledButton = _panel.Button($"Rule enabled: {(enabled ? "On" : "Off")}", width - 146, y, 146, RowHeight, () =>
         {
-            _working.Enabled = enabled ? false : (bool?)null;
+            _working.Enabled = _working.IsEnabled() ? false : (bool?)null;
             MarkDirty();
-            Render();
+            var now = _working.IsEnabled();
+            enabledButton.Set($"Rule enabled: {(now ? "On" : "Off")}", now ? UiPanel.ButtonColor : UiPanel.MutedButtonColor);
         }, enabled ? UiPanel.ButtonColor : UiPanel.MutedButtonColor);
         y += RowStep + 6f;
 
@@ -370,9 +375,12 @@ internal sealed class SpriteTab : IEditorTab
             return;
         }
 
+        var savedBefore = _savedKey;
         var file = SaveCore();
         EditorWindow.SetStatus($"Saved to {Path.GetFileName(file)}.");
-        Render();
+        // The info line and Delete button depend on which rule is saved; nothing else changes.
+        if (savedBefore != _savedKey)
+            Render();
     }
 
     private string SaveCore()

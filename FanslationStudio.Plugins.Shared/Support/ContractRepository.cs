@@ -1,4 +1,4 @@
-using FanslationStudio.Plugins.Shared;
+﻿using FanslationStudio.Plugins.Shared;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -33,7 +33,22 @@ public class ContractRepository<T> where T : class
     private readonly Dictionary<string, string> _sourceFiles = new Dictionary<string, string>();
     // Explicit order: Dictionary enumeration order is not preserved once entries are removed.
     private readonly List<string> _order = new List<string>();
-    private readonly Dictionary<string, List<T>> _matchCache = new Dictionary<string, List<T>>();
+    private readonly Dictionary<string, IReadOnlyList<T>> _matchCache = new Dictionary<string, IReadOnlyList<T>>();
+
+    // Lookup index, rebuilt lazily after any change: exact patterns by path, and the wildcard
+    // entries alone, so a cache miss costs O(wildcards) rather than O(all entries).
+    private readonly Dictionary<string, List<T>> _exactByPath = new Dictionary<string, List<T>>();
+    private readonly List<KeyValuePair<string, T>> _wildcards = new List<KeyValuePair<string, T>>();
+    // Names an element must have to match some entry (see PathPattern.LeafNameOf); unusable
+    // when any entry's last segment is a wildcard.
+    private readonly HashSet<string> _leafNames = new HashSet<string>(StringComparer.Ordinal);
+    private bool _anyWildcardLeaf;
+    private bool _indexDirty = true;
+
+    // Paths are cached per distinct path, and some games generate endless unique names
+    // (numbered clones), so the cache is dropped once it gets this big.
+    private const int MaxCachedPaths = 20000;
+    private static readonly T[] NoMatches = new T[0];
 
     public ContractRepository(string folder, string defaultFileName, IYamlHelper yamlHelper, IPluginLogger logger,
         Func<T, string> getPath, Func<T, string> getKey = null)
@@ -67,7 +82,7 @@ public class ContractRepository<T> where T : class
         _entries.Clear();
         _sourceFiles.Clear();
         _order.Clear();
-        _matchCache.Clear();
+        Invalidate();
 
         if (!Directory.Exists(_folder))
             Directory.CreateDirectory(_folder);
@@ -110,6 +125,64 @@ public class ContractRepository<T> where T : class
         Version++;
     }
 
+    private void Invalidate()
+    {
+        _matchCache.Clear();
+        _indexDirty = true;
+    }
+
+    private void EnsureIndex()
+    {
+        if (!_indexDirty)
+            return;
+
+        _indexDirty = false;
+        _exactByPath.Clear();
+        _wildcards.Clear();
+        _leafNames.Clear();
+        _anyWildcardLeaf = false;
+
+        foreach (var key in _order)
+        {
+            var contract = _entries[key];
+            var pattern = _getPath(contract);
+            if (pattern == null)
+                continue;
+
+            if (PathPattern.IsWildcard(pattern))
+                _wildcards.Add(new KeyValuePair<string, T>(pattern, contract));
+
+            // Exact patterns are also looked up literally: a pattern can equal the path itself.
+            if (!_exactByPath.TryGetValue(pattern, out var list))
+                _exactByPath[pattern] = list = new List<T>(1);
+            list.Add(contract);
+
+            var leaf = PathPattern.LeafNameOf(pattern);
+            if (leaf == null)
+                _anyWildcardLeaf = true;
+            else
+                _leafNames.Add(leaf);
+        }
+    }
+
+    /// <summary>
+    /// False only when no entry can match a path whose last segment is <paramref name="name"/>,
+    /// so callers on hot hooks can skip building the path at all.
+    /// </summary>
+    public bool CouldMatchName(string name)
+    {
+        if (_order.Count == 0 || name == null)
+            return false;
+
+        EnsureIndex();
+        if (_anyWildcardLeaf)
+            return true;
+
+        // A name containing '/' (e.g. "HP/MP") makes the path's last segment only its tail.
+        var slash = name.LastIndexOf('/');
+        return _leafNames.Contains(slash < 0 ? name : name.Substring(slash + 1));
+    }
+
     public T Get(string key)
     {
         return key != null && _entries.TryGetValue(key, out var contract) ? contract : null;
@@ -124,27 +197,30 @@ public class ContractRepository<T> where T : class
     /// <summary>Every entry whose pattern matches the path: exact patterns first, then wildcards.</summary>
     public IReadOnlyList<T> FindCandidates(string path)
     {
-        if (path == null)
-            return new T[0];
+        if (path == null || _order.Count == 0)
+            return NoMatches;
 
         if (_matchCache.TryGetValue(path, out var cached))
             return cached;
 
-        var exact = new List<T>();
-        var wildcard = new List<T>();
-        foreach (var key in _order)
+        EnsureIndex();
+        List<T> result = null;
+        if (_exactByPath.TryGetValue(path, out var exact))
+            result = new List<T>(exact);
+
+        foreach (var wildcard in _wildcards)
         {
-            var contract = _entries[key];
-            var pattern = _getPath(contract);
-            if (pattern == path)
-                exact.Add(contract);
-            else if (PathPattern.IsWildcard(pattern) && PathPattern.IsMatch(pattern, path))
-                wildcard.Add(contract);
+            // The literal-equality case was already added from _exactByPath.
+            if (wildcard.Key != path && PathPattern.IsMatch(wildcard.Key, path))
+                (result ??= new List<T>()).Add(wildcard.Value);
         }
 
-        exact.AddRange(wildcard);
-        _matchCache[path] = exact;
-        return exact;
+        if (_matchCache.Count >= MaxCachedPaths)
+            _matchCache.Clear();
+
+        IReadOnlyList<T> matches = result ?? (IReadOnlyList<T>)NoMatches;
+        _matchCache[path] = matches;
+        return matches;
     }
 
     /// <summary>Changes an entry in memory only (no file write), e.g. while the user edits it.</summary>
@@ -154,7 +230,7 @@ public class ContractRepository<T> where T : class
         if (!_entries.ContainsKey(key))
             _order.Add(key);
         _entries[key] = contract;
-        _matchCache.Clear();
+        Invalidate();
         Version++;
     }
 
@@ -165,7 +241,7 @@ public class ContractRepository<T> where T : class
             return false;
 
         RemoveEntry(key);
-        _matchCache.Clear();
+        Invalidate();
         Version++;
         return true;
     }
@@ -202,7 +278,7 @@ public class ContractRepository<T> where T : class
             _sourceFiles[key] = file;
         }
 
-        _matchCache.Clear();
+        Invalidate();
         Version++;
 
         RewriteFile(file);
@@ -219,7 +295,7 @@ public class ContractRepository<T> where T : class
 
         _sourceFiles.TryGetValue(key, out var file);
         RemoveEntry(key);
-        _matchCache.Clear();
+        Invalidate();
         Version++;
 
         if (file != null)

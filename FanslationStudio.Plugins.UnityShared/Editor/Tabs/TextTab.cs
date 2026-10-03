@@ -45,6 +45,12 @@ internal sealed class TextTab : IEditorTab
     private CurrentValues _current;
 
     private InputField _adjustX, _adjustY, _adjustWidth, _adjustHeight;
+    // Both adjust rows' "step" buttons share _nudgeIndex, so both relabel when either is clicked.
+    private readonly List<UiButton> _stepButtons = new List<UiButton>();
+
+    // Option lists per (TMP, legacy) combination: index = (showTmp ? 2 : 0) + (showLegacy ? 1 : 0).
+    private static readonly IList<string>[] AlignmentOptionsCache = new IList<string>[4];
+    private static readonly IList<string>[] OverflowOptionsCache = new IList<string>[4];
 
     private struct CurrentValues
     {
@@ -164,9 +170,12 @@ internal sealed class TextTab : IEditorTab
             : "Unsaved resizer changes discarded.", warning: worthSaving);
     }
 
+    /// <summary>Rebuilds every widget. Only for structural changes; toggles, choices and step
+    /// buttons update their own button in place.</summary>
     private void Render()
     {
         _panel.Clear();
+        _stepButtons.Clear();
         var width = _panel.Width;
         var y = 0f;
 
@@ -209,19 +218,20 @@ internal sealed class TextTab : IEditorTab
 
         var half = (width - LabelWidth - Gap) / 2f;
         _panel.Label("Alignment", 0, y, LabelWidth, RowHeight);
-        ChoiceButton(LabelWidth, y, half, "Alignment", _working.Alignment, AlignmentOptions(), v => _working.Alignment = v);
+        ChoiceButton(LabelWidth, y, half, "Alignment", () => _working.Alignment, AlignmentOptions, v => _working.Alignment = v);
         _panel.Label("Overflow", LabelWidth + half + Gap, y, 64, RowHeight);
-        ChoiceButton(LabelWidth + half + Gap + 64, y, half - 64, "Overflow", _working.OverflowMode, OverflowOptions(), v => _working.OverflowMode = v);
+        ChoiceButton(LabelWidth + half + Gap + 64, y, half - 64, "Overflow", () => _working.OverflowMode, OverflowOptions, v => _working.OverflowMode = v);
         y += RowStep;
 
         var third = (width - 2 * Gap) / 3f;
-        TriToggle("Word wrap", 0, y, third, _working.AllowWordWrap, v => _working.AllowWordWrap = v);
-        TriToggle("Auto size", third + Gap, y, third, _working.AllowAutoSizing, v => _working.AllowAutoSizing = v);
-        _panel.Button($"Trim leading space: {(_working.AllowLeftTrimText ? "On" : "Off")}", 2 * (third + Gap), y, third, RowHeight, () =>
+        TriToggle("Word wrap", 0, y, third, () => _working.AllowWordWrap, v => _working.AllowWordWrap = v);
+        TriToggle("Auto size", third + Gap, y, third, () => _working.AllowAutoSizing, v => _working.AllowAutoSizing = v);
+        UiButton trimButton = null;
+        trimButton = _panel.Button(TrimText(), 2 * (third + Gap), y, third, RowHeight, () =>
         {
             _working.AllowLeftTrimText = !_working.AllowLeftTrimText;
             MarkDirty();
-            Render();
+            trimButton.Set(TrimText(), _working.AllowLeftTrimText ? UiPanel.ButtonColor : UiPanel.MutedButtonColor);
         }, _working.AllowLeftTrimText ? UiPanel.ButtonColor : UiPanel.MutedButtonColor);
         y += RowStep + 4f;
 
@@ -337,12 +347,17 @@ internal sealed class TextTab : IEditorTab
         _panel.Button(xLabel + "+", x + (w + 2), y, w, RowHeight, () => nudge(0, NudgeSteps[_nudgeIndex]), UiPanel.MutedButtonColor);
         _panel.Button(yLabel + "-", x + 2 * (w + 2), y, w, RowHeight, () => nudge(1, -NudgeSteps[_nudgeIndex]), UiPanel.MutedButtonColor);
         _panel.Button(yLabel + "+", x + 3 * (w + 2), y, w, RowHeight, () => nudge(1, NudgeSteps[_nudgeIndex]), UiPanel.MutedButtonColor);
-        _panel.Button($"step {NudgeSteps[_nudgeIndex]}", x + 4 * (w + 2) + 4, y, 60, RowHeight, () =>
+        _stepButtons.Add(_panel.Button(StepText(), x + 4 * (w + 2) + 4, y, 60, RowHeight, () =>
         {
             _nudgeIndex = (_nudgeIndex + 1) % NudgeSteps.Length;
-            Render();
-        }, UiPanel.MutedButtonColor);
+            foreach (var button in _stepButtons)
+                button.SetText(StepText());
+        }, UiPanel.MutedButtonColor));
     }
+
+    private string StepText() => $"step {NudgeSteps[_nudgeIndex]}";
+
+    private string TrimText() => $"Trim leading space: {(_working.AllowLeftTrimText ? "On" : "Off")}";
 
     private void FloatField(string label, float x, float y, float width, float? value, Action<float?> set, string placeholder)
     {
@@ -356,27 +371,37 @@ internal sealed class TextTab : IEditorTab
         }, placeholder);
     }
 
-    private void ChoiceButton(float x, float y, float width, string title, string value, IList<string> options, Action<string> set)
+    // Options are only built when the popup opens (and cached), not on every render.
+    private void ChoiceButton(float x, float y, float width, string title, Func<string> get, Func<IList<string>> options, Action<string> set)
     {
-        var label = string.IsNullOrEmpty(value) ? "(game default)" : value;
-        _panel.Button(label, x, y, width, RowHeight, () => EditorWindow.ShowChoice(title, options, value, picked =>
+        var value = get();
+        UiButton button = null;
+        button = _panel.Button(ChoiceText(value), x, y, width, RowHeight, () => EditorWindow.ShowChoice(title, options(), get(), picked =>
         {
             set(picked ?? string.Empty);
             MarkDirty();
-            Render();
+            var updated = get();
+            button.Set(ChoiceText(updated), string.IsNullOrEmpty(updated) ? UiPanel.MutedButtonColor : UiPanel.ButtonColor);
         }), string.IsNullOrEmpty(value) ? UiPanel.MutedButtonColor : UiPanel.ButtonColor);
     }
 
-    private void TriToggle(string label, float x, float y, float width, bool? value, Action<bool?> set)
+    private static string ChoiceText(string value) => string.IsNullOrEmpty(value) ? "(game default)" : value;
+
+    private void TriToggle(string label, float x, float y, float width, Func<bool?> get, Action<bool?> set)
     {
-        var text = $"{label}: {(value == null ? "–" : value.Value ? "On" : "Off")}";
-        _panel.Button(text, x, y, width, RowHeight, () =>
+        var value = get();
+        UiButton button = null;
+        button = _panel.Button(TriText(label, value), x, y, width, RowHeight, () =>
         {
-            set(value == null ? true : value.Value ? false : (bool?)null);
+            var current = get();
+            set(current == null ? true : current.Value ? false : (bool?)null);
             MarkDirty();
-            Render();
+            var updated = get();
+            button.Set(TriText(label, updated), updated == null ? UiPanel.MutedButtonColor : UiPanel.ButtonColor);
         }, value == null ? UiPanel.MutedButtonColor : UiPanel.ButtonColor);
     }
+
+    private static string TriText(string label, bool? value) => $"{label}: {(value == null ? "–" : value.Value ? "On" : "Off")}";
 
     private void MarkDirty() => _dirty = true;
 
@@ -389,16 +414,48 @@ internal sealed class TextTab : IEditorTab
             patterns.Add(_previewPath);
         }
 
+        // No full ApplyAllResizers here: RefreshAffected below re-applies everything the edit
+        // can have changed, and this runs every PreviewInterval while editing.
         if (!string.IsNullOrEmpty(_working.Path))
-            Service.PreviewResizer(_working with { });
+            Service.PreviewResizer(_working with { }, applyAll: false);
 
         _previewPath = _working.Path;
         _hasPreview = true;
         _dirty = false;
         _lastPreviewTime = Time.realtimeSinceStartup;
 
-        Service.RefreshMatching(patterns);
+        RefreshAffected(patterns);
         EditorWindow.SetStatus("Previewing - Save to keep these changes.");
+    }
+
+    // RefreshMatching, hinted with the selected element so an exact-path resizer doesn't rescan
+    // every text on screen. Falls back to the full refresh if the hinted one fails.
+    private void RefreshAffected(List<string> patterns)
+    {
+        try
+        {
+            RefreshHinted(patterns);
+        }
+        catch (Exception)
+        {
+            Service.RefreshMatching(patterns);
+        }
+    }
+
+    // TMP types live in their own method so a game without TextMeshPro only fails this call.
+    private void RefreshHinted(List<string> patterns)
+    {
+        TextMeshProUGUI tmpHint = null;
+        Text legacyHint = null;
+        if (_element != null && _element.IsAlive)
+        {
+            if ((_element.Capabilities & ElementCapabilities.TmpText) != 0)
+                tmpHint = UiCompat.GetComponent<TextMeshProUGUI>(_element.RectTransform);
+            else
+                legacyHint = UiCompat.GetComponent<Text>(_element.RectTransform);
+        }
+
+        Service.RefreshMatching(patterns, tmpHint, legacyHint);
     }
 
     private void Save()
@@ -409,9 +466,12 @@ internal sealed class TextTab : IEditorTab
             return;
         }
 
+        var savedBefore = _savedPath;
         SaveCore();
         EditorWindow.SetStatus($"Saved to {SourceFileName(_working.Path)}.");
-        Render();
+        // The info line and Delete button depend on which resizer is saved; nothing else changes.
+        if (savedBefore != _savedPath)
+            Render();
     }
 
     private void SaveCore()
@@ -420,7 +480,10 @@ internal sealed class TextTab : IEditorTab
         if (_previewPath != _working.Path)
             Service.DiscardPreview(_previewPath);
 
-        Service.SaveResizer(_working with { }, _savedPath);
+        // RefreshMatching below re-applies what the save can have changed, so no ApplyAllResizers
+        // rescan as well. Saves are rare, so it's a full rescan: elements the hooks haven't seen
+        // since the cache was reset (which a hinted refresh would miss) still get the rule.
+        Service.SaveResizer(_working with { }, _savedPath, applyAll: false);
         _savedPath = _working.Path;
         _previewPath = _working.Path;
         _dirty = false;
@@ -473,7 +536,16 @@ internal sealed class TextTab : IEditorTab
     }
 
     // The option names TextResizerService understands for this element's text type.
-    private IList<string> AlignmentOptions()
+    // Cached per text-type combination: Enum.GetNames + Distinct is wasted work to repeat.
+    private int OptionsCacheIndex => (_showTmp ? 2 : 0) + (_showLegacy ? 1 : 0);
+
+    private IList<string> AlignmentOptions() =>
+        AlignmentOptionsCache[OptionsCacheIndex] ??= BuildAlignmentOptions();
+
+    private IList<string> OverflowOptions() =>
+        OverflowOptionsCache[OptionsCacheIndex] ??= BuildOverflowOptions();
+
+    private IList<string> BuildAlignmentOptions()
     {
         var names = new List<string> { string.Empty };
         if (_showTmp) names.AddRange(TmpAlignmentNames());
@@ -481,7 +553,7 @@ internal sealed class TextTab : IEditorTab
         return names.Distinct().ToList();
     }
 
-    private IList<string> OverflowOptions()
+    private IList<string> BuildOverflowOptions()
     {
         var names = new List<string> { string.Empty };
         if (_showTmp) names.AddRange(TmpOverflowNames());

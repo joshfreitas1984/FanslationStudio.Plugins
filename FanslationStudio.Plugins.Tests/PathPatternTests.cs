@@ -46,6 +46,22 @@ namespace FanslationStudio.Plugins.Tests
             Assert.Equal(expected, PathPattern.IsWildcard(pattern));
         }
 
+        [Theory]
+        [InlineData("Canvas/Vertical/TitleText", "TitleText")]
+        [InlineData("/Title/Text", "Text")]
+        [InlineData("/Title", "Title")]
+        [InlineData("Canvas/*/Title", "Title")]
+        [InlineData("A*/Title", "Title")]
+        [InlineData("Root", "Root")]
+        [InlineData("/*", null)]
+        [InlineData("Canvas/*", null)]
+        [InlineData("Canvas/*/Title*", null)]
+        [InlineData("A*B", null)]
+        public void LeafNameOf(string pattern, string? expected)
+        {
+            Assert.Equal(expected, PathPattern.LeafNameOf(pattern));
+        }
+
         [Fact]
         public void NullsNeverMatch()
         {

@@ -18,6 +18,17 @@ public interface IBehaviourAttacher
 
     ILegacyTextMetadata GetOrAttachLegacyTextMetadata(GameObject gameObject, out bool wasAttached);
 
+    // The existing metadata, or null if none was ever attached - for callers (e.g. reverting)
+    // that must not attach empty metadata as a side effect.
+    ITextMetadata TryGetTextMetadata(GameObject gameObject);
+
+    ILegacyTextMetadata TryGetLegacyTextMetadata(GameObject gameObject);
+
+    // The text as a TextMeshProUGUI, or null if it's another TMP_Text (e.g. 3D TextMeshPro).
+    // Under IL2CPP, Harmony hands patches a wrapper typed as the declared TMP_Text, so C#'s
+    // `is`/`as` is always false there and the host has to use TryCast instead.
+    TextMeshProUGUI AsTextMeshProUGUI(TMP_Text text);
+
     // UnityEngine.Object.FindObjectsOfType<T>() is a generic Unity API call. Under IL2CPP, calling
     // it from code compiled in Shared (against the Mono-style stub assemblies) throws
     // MissingMethodException at runtime even though the method exists in the game's real

@@ -1,4 +1,5 @@
-﻿using FanslationStudio.Plugins.Shared;
+﻿using FanslationStudio.Plugins.DynamicStrings;
+using FanslationStudio.Plugins.Shared;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -21,6 +22,11 @@ public class PrefabTextDumperService
     // Host-runtime-specific finder for GameObjects/Components. See IPrefabTextFinder for why this
     // can't be a direct Resources.FindObjectsOfTypeAll/GetComponentsInChildren call from Shared.
     private readonly IPrefabTextFinder _elementFinder;
+    private readonly Regex _matchRegex;
+
+    // Per component type: the serialized text field, or null when the type has none (always the
+    // case under IL2CPP, where the wrappers expose it as a property) and the finder reads it.
+    private readonly Dictionary<Type, FieldInfo> _textFields = [];
 
     public PrefabTextDumperService(IPluginLogger logger, string regexPattern, string gameDataPath,
         IPrefabTextFinder elementFinder)
@@ -29,6 +35,7 @@ public class PrefabTextDumperService
         RegexPattern = regexPattern;
         GameDataPath = gameDataPath;
         _elementFinder = elementFinder;
+        _matchRegex = DynamicStringSupport.CreateMatchRegex(regexPattern);
     }
 
     /// <summary>
@@ -69,16 +76,12 @@ public class PrefabTextDumperService
     {
         try
         {
-            var allGameObjects = _elementFinder.FindAllGameObjectsInResources();
-            Logger.LogWarning($"Found {allGameObjects.Length} GameObjects in Resources");
+            // Every loaded text component (scene objects, inactive objects and prefab assets),
+            // filtered by type in the engine rather than walking every GameObject's components.
+            var components = _elementFinder.FindAllTextComponentsInResources();
+            Logger.LogWarning($"Found {components.Length} text components in Resources");
 
-            foreach (var gameObject in allGameObjects)
-            {
-                if (gameObject != null)
-                {
-                    ExtractTextFromGameObject(gameObject, exportedStrings);
-                }
-            }
+            ExtractText(components, exportedStrings);
         }
         catch (Exception ex)
         {
@@ -160,19 +163,7 @@ public class PrefabTextDumperService
             // Delegated to the host-specific finder (see IPrefabTextFinder) - calling
             // GetComponentsInChildren(Type, bool) directly from Shared throws MissingMethodException
             // at runtime under IL2CPP.
-            var components = _elementFinder.GetComponentsInChildren(gameObject, true);
-            foreach (var component in components)
-            {
-                if (component == null)
-                    continue;
-
-                var text = GetValidTextProperty(component);
-                if (!string.IsNullOrEmpty(text))
-                {
-                    var cleanedText = text.Replace("\n", "\\n").Replace("\r", "");
-                    exportedStrings.Add(cleanedText);
-                }
-            }
+            ExtractText(_elementFinder.GetTextComponentsInChildren(gameObject, true), exportedStrings);
         }
         catch (Exception ex)
         {
@@ -180,17 +171,38 @@ public class PrefabTextDumperService
         }
     }
 
-    private static string GetValidTextProperty(object component)
+    private void ExtractText(Component[] components, HashSet<string> exportedStrings)
     {
-        var response = string.Empty;
+        foreach (var component in components)
+        {
+            if (component == null)
+                continue;
 
-        if (component is null)
-            return response;
+            var text = GetValidTextProperty(component);
+            if (!string.IsNullOrEmpty(text))
+            {
+                var cleanedText = text.Replace("\n", "\\n").Replace("\r", "");
+                exportedStrings.Add(cleanedText);
+            }
+        }
+    }
 
-        var type = component.GetType();
+    private string GetValidTextProperty(Component component)
+    {
+        // Mono reads the serialized field (as the replacer does). Under IL2CPP the wrappers have
+        // no such field, so the host finder reads the text instead.
+        var textField = GetTextField(component.GetType());
+        var textValue = textField != null
+            ? textField.GetValue(component) as string
+            : _elementFinder.GetText(component);
 
-        if (type is null)
-            return response;
+        return !string.IsNullOrEmpty(textValue) && _matchRegex.IsMatch(textValue) ? textValue : string.Empty;
+    }
+
+    private FieldInfo GetTextField(Type type)
+    {
+        if (_textFields.TryGetValue(type, out var textField))
+            return textField;
 
         // Type.GetField with BindingFlags.NonPublic does NOT search inherited members unless
         // BindingFlags.FlattenHierarchy is also specified. TextMeshProUGUI's "m_text" field is
@@ -198,17 +210,14 @@ public class PrefabTextDumperService
         // FlattenHierarchy this always returned null for every TMP component - silently skipping
         // the vast majority of in-game text. UnityEngine.UI.Text's "m_Text" happened to be
         // declared directly on Text, so that path worked by coincidence.
-        var textField =
+        textField =
             type.GetField("m_text", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
             ?? type.GetField("m_Text", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy);
 
-        if (textField != null && textField.FieldType == typeof(string))
-        {
-            var textValue = textField.GetValue(component) as string;
-            if (!string.IsNullOrEmpty(textValue) && Regex.IsMatch(textValue, RegexPattern))
-                response = textValue;
-        }
+        if (textField != null && textField.FieldType != typeof(string))
+            textField = null;
 
-        return response;
+        _textFields[type] = textField;
+        return textField;
     }
 }

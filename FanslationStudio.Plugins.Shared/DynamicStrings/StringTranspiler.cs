@@ -7,7 +7,10 @@ namespace FanslationStudio.Plugins.DynamicStrings;
 
 public class StringTranspiler
 {
-    public static DynamicStringContract[] ContractsToApply;
+    // Per patched method, keyed by the original so a re-run of the transpiler (Harmony re-runs
+    // every transpiler whenever anything else patches the same method) still gets its own
+    // translations rather than whichever group was patched last.
+    private static readonly Dictionary<MethodBase, MethodTranslations> TranslationsByMethod = [];
 
     // Undo dump changes
     public static void PrepareDynamicString(string input, out string prepared, out string preparedAlt)
@@ -37,27 +40,17 @@ public class StringTranspiler
         return string.Equals(leftComparison, rightComparison);
     }
 
-    public static IEnumerable<CodeInstruction> ReplaceWithTranspiler(IEnumerable<CodeInstruction> instructions)
+    // Harmony passes the original method to any MethodBase parameter of a transpiler.
+    public static IEnumerable<CodeInstruction> ReplaceWithTranspiler(IEnumerable<CodeInstruction> instructions, MethodBase __originalMethod)
     {
+        var translations = FindTranslations(__originalMethod);
+        if (translations == null)
+            return instructions;
+
         // Map fix remove when fixed in game
         var ifCount = 0;
-        bool isMapFix = ContractsToApply[0].Type == "MapFuBenDetailPanel" && ContractsToApply[0].Method == "Refresh";
-
-        var rawToTranslated = new Dictionary<string, string>();
-
-        // Build translation dictionaries
-        foreach (var replacement in ContractsToApply)
-        {
-            PrepareDynamicString(replacement.Raw, out string preparedRaw, out string preparedRaw2);
-            PrepareDynamicString(replacement.Translation, out string preparedTrans, out string preparedTrans2);
-
-            // If we're replacing same string in method
-            if (rawToTranslated.ContainsKey(preparedRaw))
-                continue;
-
-            rawToTranslated[preparedRaw] = preparedTrans;
-            rawToTranslated[preparedRaw2] = preparedTrans2;
-        }
+        bool isMapFix = translations.IsMapFix;
+        var rawToTranslated = translations.RawToTranslated;
 
         var codes = new List<CodeInstruction>(instructions);
         var textReplaced = new List<string>();
@@ -88,6 +81,7 @@ public class StringTranspiler
             {
                 // find if (npcPrototype != null)
                 if (codes[i].opcode == OpCodes.Ldloc_S
+                    && i + 1 < codes.Count
                     && codes[i + 1].opcode == OpCodes.Brfalse)
                 {
                     //PatchesPlugin.Logger.LogWarning($"Found if (param != null) at {i}: {codes[i].operand}");
@@ -135,14 +129,60 @@ public class StringTranspiler
         newInstruction.MoveBlocksFrom(rawInstruction);
     }
 
-    public static HarmonyMethod CreateTranspilerMethod(DynamicStringContract[] contractsToApply)
+    private static MethodTranslations FindTranslations(MethodBase original)
     {
-        // Store the patch data in a static field so our transpiler can access it
-        ContractsToApply = contractsToApply;
+        if (original == null)
+            return null;
+
+        if (TranslationsByMethod.TryGetValue(original, out var translations))
+            return translations;
+
+        // Fallback in case Harmony hands us a different MethodBase instance for the same method.
+        foreach (var entry in TranslationsByMethod)
+            if (entry.Key.MethodHandle == original.MethodHandle)
+                return entry.Value;
+
+        return null;
+    }
+
+    /// <summary>
+    /// Registers the contracts to apply to <paramref name="original"/> and returns the transpiler.
+    /// Call once per method with every contract targeting it, before patching.
+    /// </summary>
+    public static HarmonyMethod CreateTranspilerMethod(MethodBase original, IList<DynamicStringContract> contractsToApply)
+    {
+        // Store the patch data where our transpiler can find it again for this method
+        TranslationsByMethod[original] = new MethodTranslations(contractsToApply);
 
         var methodInfo = typeof(StringTranspiler).GetMethod("ReplaceWithTranspiler",
             BindingFlags.Public | BindingFlags.Static);
 
         return new HarmonyMethod(methodInfo);
+    }
+
+    // Built once per method rather than on every transpiler run.
+    private sealed class MethodTranslations
+    {
+        public Dictionary<string, string> RawToTranslated { get; } = [];
+        public bool IsMapFix { get; }
+
+        public MethodTranslations(IList<DynamicStringContract> contracts)
+        {
+            IsMapFix = contracts.Count > 0 && contracts[0].Type == "MapFuBenDetailPanel" && contracts[0].Method == "Refresh";
+
+            // Build translation dictionaries
+            foreach (var replacement in contracts)
+            {
+                PrepareDynamicString(replacement.Raw, out string preparedRaw, out string preparedRaw2);
+                PrepareDynamicString(replacement.Translation, out string preparedTrans, out string preparedTrans2);
+
+                // If we're replacing same string in method
+                if (RawToTranslated.ContainsKey(preparedRaw))
+                    continue;
+
+                RawToTranslated[preparedRaw] = preparedTrans;
+                RawToTranslated[preparedRaw2] = preparedTrans2;
+            }
+        }
     }
 }

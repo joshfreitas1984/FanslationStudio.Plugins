@@ -33,6 +33,23 @@ public class MonoElementFinder : IBehaviourAttacher, IPrefabTextFinder
         return metadata;
     }
 
+    public ITextMetadata TryGetTextMetadata(GameObject gameObject)
+    {
+        var metadata = gameObject.GetComponent<TextMetadataComponent>();
+        return metadata != null ? metadata : null;
+    }
+
+    public ILegacyTextMetadata TryGetLegacyTextMetadata(GameObject gameObject)
+    {
+        var metadata = gameObject.GetComponent<LegacyTextMetadataComponent>();
+        return metadata != null ? metadata : null;
+    }
+
+    public TextMeshProUGUI AsTextMeshProUGUI(TMP_Text text)
+    {
+        return text as TextMeshProUGUI;
+    }
+
     public TextMeshProUGUI[] FindAllTextElements()
     {
         return UnityEngine.Object.FindObjectsOfType<TextMeshProUGUI>();
@@ -54,11 +71,46 @@ public class MonoElementFinder : IBehaviourAttacher, IPrefabTextFinder
 
     public Component[] GetComponentsInChildren(GameObject gameObject, bool includeInactive)
     {
-        var components = gameObject.GetComponentsInChildren(typeof(Component), includeInactive);
-        var result = new Component[components.Length];
-        for (var i = 0; i < components.Length; i++)
-            result[i] = components[i] as Component;
-        return result;
+        return gameObject.GetComponentsInChildren(typeof(Component), includeInactive);
+    }
+
+    // The components with a serialized m_text/m_Text that prefab text is read from and written to.
+    private static readonly System.Type[] TextComponentTypes =
+        { typeof(TMP_Text), typeof(Text), typeof(TMP_InputField), typeof(InputField) };
+
+    public Component[] FindAllTextComponentsInResources()
+    {
+        var result = new List<Component>();
+        foreach (var type in TextComponentTypes)
+        {
+            foreach (var obj in Resources.FindObjectsOfTypeAll(type))
+            {
+                if (obj is Component component)
+                    result.Add(component);
+            }
+        }
+        return result.ToArray();
+    }
+
+    public Component[] GetTextComponentsInChildren(GameObject gameObject, bool includeInactive)
+    {
+        var result = new List<Component>();
+        foreach (var type in TextComponentTypes)
+            result.AddRange(gameObject.GetComponentsInChildren(type, includeInactive));
+        return result.ToArray();
+    }
+
+    public string GetText(Component component)
+    {
+        if (component is TMP_Text tmp)
+            return tmp.text;
+        if (component is Text legacy)
+            return legacy.text;
+        if (component is TMP_InputField tmpInput)
+            return tmpInput.text;
+        if (component is InputField input)
+            return input.text;
+        return null;
     }
 
     // AssetBundle.LoadFromFile/GetAllAssetNames/LoadAsset/Unload are non-generic Unity API calls,
@@ -72,9 +124,10 @@ public class MonoElementFinder : IBehaviourAttacher, IPrefabTextFinder
 
         try
         {
-            foreach (var assetName in bundle.GetAllAssetNames())
+            // Type-filtered, so the bundle's textures, audio etc. are never loaded just to be skipped.
+            foreach (var asset in bundle.LoadAllAssets(typeof(GameObject)))
             {
-                if (bundle.LoadAsset(assetName) is GameObject gameObject)
+                if (asset is GameObject gameObject)
                     result.Add(gameObject);
             }
         }

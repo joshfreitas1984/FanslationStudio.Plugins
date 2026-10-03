@@ -21,7 +21,21 @@ public static class PathPattern
 
     public static bool IsWildcard(string pattern)
     {
-        return pattern != null && (pattern.Contains("*") || pattern.StartsWith("/"));
+        return pattern != null && (pattern.IndexOf('*') >= 0 || (pattern.Length > 0 && pattern[0] == '/'));
+    }
+
+    /// <summary>
+    /// The name every path matching this pattern must end with (its last segment), or null if
+    /// that segment contains a <c>*</c> and so can match any name. Lets hot hooks skip building
+    /// a hierarchy path for objects whose own name can't match any rule.
+    /// </summary>
+    public static string LeafNameOf(string pattern)
+    {
+        if (pattern == null)
+            return null;
+
+        var leaf = pattern.Substring(pattern.LastIndexOf('/') + 1);
+        return leaf.IndexOf('*') >= 0 ? null : leaf;
     }
 
     public static bool IsMatch(string pattern, string path)
@@ -40,7 +54,7 @@ public static class PathPattern
         var builder = new StringBuilder("^");
         var body = pattern;
 
-        if (body.StartsWith("/"))
+        if (body.StartsWith("/", System.StringComparison.Ordinal))
         {
             builder.Append("(?:.*/)?");
             body = body.TrimStart(new[] { '/' });

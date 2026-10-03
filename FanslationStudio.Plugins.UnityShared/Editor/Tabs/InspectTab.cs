@@ -25,6 +25,7 @@ internal sealed class InspectTab : IEditorTab
     private const float ButtonWidth = 150f;
     private const float Gap = 4f;
     private const float RowHeight = 20f;
+    private const int MaxChildButtons = 50;
 
     private UiPanel _panel;
     private RectTransform _root;
@@ -107,8 +108,11 @@ internal sealed class InspectTab : IEditorTab
             _panel.Label($"Children ({childCount}):", 0, y, width, 16, 11, TextAnchor.MiddleLeft, UiPanel.DimTextColor);
             y += 18f;
 
+            // Some containers (scroll lists, grids) have hundreds of children; a button each would
+            // be hundreds of objects per render, mostly off the bottom of the panel anyway.
+            var shown = Mathf.Min(childCount, MaxChildButtons);
             var columns = Mathf.Max(1, (int)((width + Gap) / (ButtonWidth + Gap)));
-            for (var i = 0; i < childCount; i++)
+            for (var i = 0; i < shown; i++)
             {
                 var child = UiCompat.As<RectTransform>(_root.GetChild(i));
                 if (child == null)
@@ -119,7 +123,14 @@ internal sealed class InspectTab : IEditorTab
                 _panel.Button(child.name, col * (ButtonWidth + Gap), y + row * (ButtonHeight + Gap), ButtonWidth, ButtonHeight,
                     () => Navigate(child), UiPanel.MutedButtonColor);
             }
-            y += (float)Math.Ceiling(childCount / (double)columns) * (ButtonHeight + Gap) + 8f;
+            y += (float)Math.Ceiling(shown / (double)columns) * (ButtonHeight + Gap) + 8f;
+
+            if (childCount > shown)
+            {
+                _panel.Label($"+{childCount - shown} more children not shown (pick one on screen, or pick a deeper element and use Up).",
+                    0, y - 4f, width, 16, 11, TextAnchor.MiddleLeft, UiPanel.DimTextColor);
+                y += 16f;
+            }
         }
 
         // ---- Components on this element. ------------------------------------------------------

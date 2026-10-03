@@ -44,10 +44,44 @@ internal static class PickerController
     public static IReadOnlyList<PickedElement> Stack => _stack;
     public static int StackIndex => _stackIndex;
 
+    // Hotkey descriptions for the status line, built once (the hotkeys only change on restart).
+    private static string _cycleText;
+    private static string _clearText;
+    private static string _pickAppearedText;
+    private static string _parentChildText;
+
+    // The overlay status line and what it was built from; rebuilt only when one of these changes,
+    // since RefreshOverlay runs every frame while anything is selected.
+    private static string _overlayStatus;
+    private static PickedElement _overlayElement;
+    private static int _overlayStackIndex;
+    private static int _overlayStackCount;
+    private static int _overlayState; // 0 none, 1 waiting for appeared, 2 closed, 3 alive
+
     public static void Configure(IPluginLogger logger, UiEditorHotkeys hotkeys)
     {
         _logger = logger;
         _hotkeys = hotkeys ?? new UiEditorHotkeys();
+        _cycleText = null;
+        _overlayStatus = null;
+    }
+
+    /// <summary>How to cycle through the stack, as shown to the user ("Alt + Wheel or Page Up / Page Down").</summary>
+    public static string CycleText
+    {
+        get
+        {
+            if (_cycleText == null)
+            {
+                var keys = $"{UiEditorHotkeys.Describe(_hotkeys.Previous)} / {UiEditorHotkeys.Describe(_hotkeys.Next)}";
+                var wheel = _hotkeys.WheelText;
+                _cycleText = wheel != null ? $"{wheel} or {keys}" : keys;
+                _clearText = UiEditorHotkeys.Describe(_hotkeys.Clear);
+                _pickAppearedText = UiEditorHotkeys.Describe(_hotkeys.PickAppeared);
+                _parentChildText = $"{UiEditorHotkeys.Describe(_hotkeys.Parent)} / {UiEditorHotkeys.Describe(_hotkeys.Child)}";
+            }
+            return _cycleText;
+        }
     }
 
     public static void Tick()
@@ -102,12 +136,6 @@ internal static class PickerController
             _logOverlayState = false;
             _logger?.LogDebug($"[UIEditor] Selected {Selected?.Path ?? "(none)"} - {HighlightOverlay.Describe()}");
         }
-    }
-
-    private static string CycleText()
-    {
-        var keys = $"{UiEditorHotkeys.Describe(_hotkeys.Previous)} / {UiEditorHotkeys.Describe(_hotkeys.Next)}";
-        return _hotkeys.WheelText != null ? $"{_hotkeys.WheelText} or {keys}" : keys;
     }
 
     private static bool IsWheelModifierHeld(IInputSystem input)
@@ -253,33 +281,47 @@ internal static class PickerController
 
     private static void RefreshOverlay()
     {
-        if (IsWaitingForAppeared)
-        {
-            // Status only: a highlight could sit over the popup being targeted.
-            HighlightOverlay.Show(null, $"Hover to open the tooltip or popup, then press {UiEditorHotkeys.Describe(_hotkeys.PickAppeared)} again   " +
-                                        $"({UiEditorHotkeys.Describe(_hotkeys.Clear)}: cancel)");
-            return;
-        }
-
         var selected = Selected;
-        if (selected == null)
+        int state;
+        if (IsWaitingForAppeared)
+            state = 1;
+        else if (selected == null)
+            state = 0;
+        else
+            state = selected.IsAlive ? 3 : 2;
+
+        if (state == 0)
         {
             HighlightOverlay.Hide();
             return;
         }
 
-        var position = _stackIndex >= 0 ? $"{_stackIndex + 1}/{_stack.Count}" : "–";
-        if (!selected.IsAlive)
+        if (_overlayStatus == null || state != _overlayState || !ReferenceEquals(selected, _overlayElement)
+            || _stackIndex != _overlayStackIndex || _stack.Count != _overlayStackCount)
         {
-            HighlightOverlay.Show(null, $"[{position}] {selected}   closed by the game - edits still save, " +
-                                        $"reopen it to see them   ({UiEditorHotkeys.Describe(_hotkeys.Clear)}: clear)");
-            return;
+            _overlayState = state;
+            _overlayElement = selected;
+            _overlayStackIndex = _stackIndex;
+            _overlayStackCount = _stack.Count;
+            _overlayStatus = BuildOverlayStatus(state, selected);
         }
 
-        HighlightOverlay.Show(selected.RectTransform,
-            $"[{position}] {selected}   {PickedElement.Truncate(selected.Path, 90)}   " +
-            $"({CycleText()}: cycle, " +
-            $"{UiEditorHotkeys.Describe(_hotkeys.Parent)} / {UiEditorHotkeys.Describe(_hotkeys.Child)}: parent/child, " +
-            $"{UiEditorHotkeys.Describe(_hotkeys.Clear)}: clear)");
+        // Status only while waiting (a highlight could sit over the popup being targeted) or
+        // once the game has closed the element.
+        HighlightOverlay.Show(state == 3 ? selected.RectTransform : null, _overlayStatus);
+    }
+
+    private static string BuildOverlayStatus(int state, PickedElement selected)
+    {
+        var cycleText = CycleText; // also builds the other hotkey texts
+        if (state == 1)
+            return $"Hover to open the tooltip or popup, then press {_pickAppearedText} again   ({_clearText}: cancel)";
+
+        var position = _stackIndex >= 0 ? $"{_stackIndex + 1}/{_stack.Count}" : "–";
+        if (state == 2)
+            return $"[{position}] {selected}   closed by the game - edits still save, reopen it to see them   ({_clearText}: clear)";
+
+        return $"[{position}] {selected}   {PickedElement.Truncate(selected.Path, 90)}   " +
+               $"({cycleText}: cycle, {_parentChildText}: parent/child, {_clearText}: clear)";
     }
 }

@@ -1,4 +1,4 @@
-#if IL2CPP
+﻿#if IL2CPP
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 #endif
@@ -18,10 +18,28 @@ namespace FanslationStudio.Plugins.UnityShared;
 /// </summary>
 internal static class UiCompat
 {
+#if IL2CPP
+    // Il2CppType.From(Type) resolves the native class through reflection (MakeGenericType +
+    // GetField) and allocates a new wrapper on every call, and the calls below run per element on
+    // hot hooks. Cached per CLR type; non-generic on purpose (see hazard 3 in the instructions).
+    private static readonly System.Collections.Generic.Dictionary<System.Type, Il2CppSystem.Type> Il2CppTypes = new();
+
+    public static Il2CppSystem.Type Il2CppTypeOf(System.Type type)
+    {
+        if (!Il2CppTypes.TryGetValue(type, out var il2CppType))
+        {
+            il2CppType = Il2CppType.From(type);
+            Il2CppTypes[type] = il2CppType;
+        }
+
+        return il2CppType;
+    }
+#endif
+
     public static T AddComponent<T>(GameObject gameObject) where T : Component
     {
 #if IL2CPP
-        return gameObject.AddComponent(Il2CppType.From(typeof(T))).TryCast<T>();
+        return gameObject.AddComponent(Il2CppTypeOf(typeof(T))).TryCast<T>();
 #else
         return gameObject.AddComponent<T>();
 #endif
@@ -32,7 +50,7 @@ internal static class UiCompat
         if (gameObject == null)
             return null;
 #if IL2CPP
-        var component = gameObject.GetComponent(Il2CppType.From(typeof(T)));
+        var component = gameObject.GetComponent(Il2CppTypeOf(typeof(T)));
         return component == null ? null : component.TryCast<T>();
 #else
         return gameObject.GetComponent<T>();
@@ -68,7 +86,7 @@ internal static class UiCompat
     public static T FindObjectOfType<T>() where T : Object
     {
 #if IL2CPP
-        return As<T>(Object.FindObjectOfType(Il2CppType.From(typeof(T))));
+        return As<T>(Object.FindObjectOfType(Il2CppTypeOf(typeof(T))));
 #else
         return Object.FindObjectOfType<T>();
 #endif
@@ -93,27 +111,39 @@ internal static class UiCompat
         return null;
     }
 
+    private static Font _builtinFont;
+    private static bool _builtinFontLookedUp;
+
+    /// <summary>The built-in UI font, looked up once (every editor label asks for it).</summary>
     public static Font GetBuiltinFont()
     {
-        // Unity 2022.2+ renamed the built-in font; older versions throw for the new name.
+        if (_builtinFontLookedUp)
+            return _builtinFont;
+
+        _builtinFontLookedUp = true;
+        // Unity 2022.2+ renamed the built-in font; older versions throw for the new name. Under
+        // IL2CPP the failure surfaces as an interop exception, not ArgumentException, so catch all.
         foreach (var name in new[] { "Arial.ttf", "LegacyRuntime.ttf" })
         {
             try
             {
 #if IL2CPP
-                var font = As<Font>(Resources.GetBuiltinResource(Il2CppType.From(typeof(Font)), name));
+                var font = As<Font>(Resources.GetBuiltinResource(Il2CppTypeOf(typeof(Font)), name));
 #else
                 var font = Resources.GetBuiltinResource<Font>(name);
 #endif
                 if (font != null)
-                    return font;
+                {
+                    _builtinFont = font;
+                    break;
+                }
             }
-            catch (System.ArgumentException)
+            catch (System.Exception)
             {
             }
         }
 
-        return null;
+        return _builtinFont;
     }
 
     /// <summary>Every component on the given GameObject (not its children), by real runtime type -
@@ -123,7 +153,7 @@ internal static class UiCompat
         if (gameObject == null)
             return System.Array.Empty<Component>();
 #if IL2CPP
-        var components = gameObject.GetComponents(Il2CppType.From(typeof(Component)));
+        var components = gameObject.GetComponents(Il2CppTypeOf(typeof(Component)));
         var result = new Component[components.Length];
         for (var i = 0; i < components.Length; i++)
             result[i] = components[i] as Component;
@@ -143,6 +173,27 @@ internal static class UiCompat
         var corners = new Vector3[4];
         rectTransform.GetWorldCorners(corners);
         return corners;
+#endif
+    }
+
+#if IL2CPP
+    private static Il2CppStructArray<Vector3> _cornersBuffer;
+#endif
+
+    /// <summary>
+    /// Fills <paramref name="result"/> (length 4 or more) with the world corners without
+    /// allocating, for callers that run every frame.
+    /// </summary>
+    public static void GetWorldCorners(RectTransform rectTransform, Vector3[] result)
+    {
+#if IL2CPP
+        // Must be an Il2CppStructArray (hazard 7), so keep one native buffer and copy out of it.
+        _cornersBuffer ??= new Il2CppStructArray<Vector3>(4);
+        rectTransform.GetWorldCorners(_cornersBuffer);
+        for (var i = 0; i < 4; i++)
+            result[i] = _cornersBuffer[i];
+#else
+        rectTransform.GetWorldCorners(result);
 #endif
     }
 

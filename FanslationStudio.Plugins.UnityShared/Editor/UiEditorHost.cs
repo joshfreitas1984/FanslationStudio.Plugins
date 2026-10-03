@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using BepInEx.Configuration;
 using FanslationStudio.Plugins.DynamicStrings;
@@ -10,6 +10,7 @@ using FanslationStudio.Plugins.Support;
 using FanslationStudio.Plugins.TextResizer;
 using FanslationStudio.Plugins.UnityShared.Layout;
 using FanslationStudio.Plugins.UnityShared.Sprites;
+using UnityEngine;
 
 namespace FanslationStudio.Plugins.UnityShared.Editor;
 
@@ -32,6 +33,7 @@ internal static class UiEditorHost
     private static string _gameDataPath;
     private static IPrefabTextFinder _prefabTextFinder;
     private static string _rawStringsPath;
+    private static int _lastTickedFrame = -1;
 
     public static bool Enabled { get; private set; }
 
@@ -101,10 +103,26 @@ internal static class UiEditorHost
         if (!Enabled)
             return;
 
+        // Canvas.willRenderCanvases (the Mono tick) is raised again by every
+        // Canvas.ForceUpdateCanvases call, so guard against ticking twice in one frame: it would
+        // redo the per-frame work and handle the same click or key press twice.
+        var frame = Time.frameCount;
+        if (frame == _lastTickedFrame)
+            return;
+        _lastTickedFrame = frame;
+
         try
         {
-            if (_layoutsEnabled || _spritesEnabled)
-                UiHooks.EnsurePatched(_harmonyId + ".Hooks", _logger);
+            var layoutRules = _layoutsEnabled && LayoutApplier.HasRules;
+            var spriteRules = _spritesEnabled && SpriteApplier.HasRules;
+            if ((layoutRules || spriteRules) && UiHooks.EnsurePatched(_harmonyId + ".Hooks", _logger, layoutRules))
+            {
+                // Elements enabled before the hooks existed never raised them.
+                if (layoutRules)
+                    LayoutApplier.ReapplyAll();
+                if (spriteRules)
+                    SpriteApplier.ReapplyAll();
+            }
 
             if (_hotkeys.Reload.IsDown())
                 ReloadAll();

@@ -163,6 +163,39 @@ public class TextResizerServiceSaveDeleteTests
     }
 
     [Fact]
+    public void FindAppropriateResizer_WildcardMatchesFollowPreviewsAndDiscards()
+    {
+        lock (StaticStateLock)
+        {
+            var (service, _, _, _) = CreateService(nameof(FindAppropriateResizer_WildcardMatchesFollowPreviewsAndDiscards));
+
+            // Cached as "no match" before any wildcard exists.
+            Assert.Null(TextResizerService.FindAppropriateResizer("Canvas/Panel/Label"));
+
+            service.PreviewResizer(new TextResizerContract { Path = "Canvas/*/Label", IdealFontSize = 11 }, applyAll: false);
+            Assert.Equal("Canvas/*/Label", TextResizerService.FindAppropriateResizer("Canvas/Panel/Label")?.Path);
+
+            // Earlier (load-order) wildcards win; "/*" matches everything.
+            service.PreviewResizer(new TextResizerContract { Path = "/*", IdealFontSize = 12 }, applyAll: false);
+            Assert.Equal("Canvas/*/Label", TextResizerService.FindAppropriateResizer("Canvas/Panel/Label")?.Path);
+            Assert.Equal("/*", TextResizerService.FindAppropriateResizer("Other/Thing")?.Path);
+
+            // Exact paths still beat wildcards.
+            Assert.Equal("Canvas/A", TextResizerService.FindAppropriateResizer("Canvas/A")?.Path);
+
+            service.DiscardPreview("Canvas/*/Label");
+            Assert.Equal("/*", TextResizerService.FindAppropriateResizer("Canvas/Panel/Label")?.Path);
+
+            // An in-place preview edit (same path) is picked up too.
+            service.PreviewResizer(new TextResizerContract { Path = "/*", IdealFontSize = 13 }, applyAll: false);
+            Assert.Equal(13, TextResizerService.FindAppropriateResizer("Other/Thing")?.IdealFontSize);
+
+            service.DiscardPreview("/*");
+            Assert.Null(TextResizerService.FindAppropriateResizer("Other/Thing"));
+        }
+    }
+
+    [Fact]
     public void Instance_IsTheMostRecentlyCreatedService()
     {
         lock (StaticStateLock)

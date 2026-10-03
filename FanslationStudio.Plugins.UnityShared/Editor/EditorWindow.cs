@@ -60,13 +60,33 @@ internal static class EditorWindow
     private static ListMode _listMode = ListMode.UnderCursor;
     private static string _ruleFilter = string.Empty;
     private static int _rulePage;
-    private static string _rulesListKey;
+
+    // What the Rules list was built from, so RulesListIsStale is a few int compares per frame.
+    private static readonly int[] _rulesListVersions = new int[_tabs.Count];
+    private static IEditorTab _rulesListTab;
+    private static string _rulesListEditing;
+
+    // The Under cursor list's row buttons, so a selection change within the same stack (wheel
+    // cycling) just recolours them instead of rebuilding the list.
+    private static readonly List<UiButton> _cursorRows = new List<UiButton>();
+    private static IReadOnlyList<PickedElement> _cursorListStack;
+    private static PickedElement _cursorListSelected;
+    private static int _cursorListFirst = -1;
+    private static bool _cursorListBuilt;
 
     private static bool _selectionDirty = true;
     private static int _tabIndex;
     private static IEditorTab _builtTab;
     private static PickedElement _builtElement;
     private static string _builtRulePath;
+
+    // Selection changes in quick succession (wheel cycling through the stack) rebuild the header
+    // straight away but build the tab content only once the selection settles.
+    private const float ContentDebounceSeconds = 0.1f;
+    private static float _lastSelectionChangeTime = -1f;
+    private static bool _contentPending;
+    private static PickedElement _pendingElement;
+    private static string _pendingRulePath;
 
     // Set when a rule is chosen in the Rules list; consumed by the next RebuildElement.
     private static string _openRulePath;
@@ -75,16 +95,38 @@ internal static class EditorWindow
     private static Vector2 _dragPointerStart;
     private static Vector2 _dragWindowStart;
 
-    public static bool IsOpen => _root != null && _root.activeSelf;
+    // Tracked here rather than read back through activeSelf (an interop call) several times a frame.
+    private static bool _open;
+    private static bool _settingsOpen;
 
-    private static bool SettingsOpen => _settings != null && _settings.Rect.gameObject.activeSelf;
+    private static int _typingFrame = -1;
+    private static bool _typing;
+
+    public static bool IsOpen => _open && _root != null;
+
+    private static bool SettingsOpen => _settingsOpen;
 
     /// <summary>True while the user is typing in a field, so global hotkeys should stand down.</summary>
-    public static bool IsTyping => IsOpen && (
-        (_content != null && _content.AnyInputFocused) ||
-        (_header != null && _header.AnyInputFocused) ||
-        (_listTop != null && _listTop.AnyInputFocused) ||
-        (SettingsOpen && _settings.AnyInputFocused));
+    public static bool IsTyping
+    {
+        get
+        {
+            if (!IsOpen)
+                return false;
+
+            // Asked several times a frame (hotkeys, picker); focus doesn't change in between.
+            var frame = Time.frameCount;
+            if (frame != _typingFrame)
+            {
+                _typingFrame = frame;
+                _typing = (_content != null && _content.AnyInputFocused) ||
+                          (_header != null && _header.AnyInputFocused) ||
+                          (_listTop != null && _listTop.AnyInputFocused) ||
+                          (SettingsOpen && _settings.AnyInputFocused);
+            }
+            return _typing;
+        }
+    }
 
     public static void Configure(float scale)
     {
@@ -108,6 +150,8 @@ internal static class EditorWindow
     {
         EnsureBuilt();
         _root.SetActive(true);
+        _open = true;
+        _typingFrame = -1;
         _selectionDirty = true;
     }
 
@@ -119,6 +163,7 @@ internal static class EditorWindow
         LeaveTab();
         CloseSettings();
         _root.SetActive(false);
+        _open = false;
         _dragging = false;
     }
 
@@ -165,11 +210,33 @@ internal static class EditorWindow
         if (!IsOpen)
             return;
 
+        // Inputs first, so what was typed reaches the tab before a selection change or a click
+        // rebuilds (and auto-saves) it.
+        if (SettingsOpen)
+        {
+            _settings.PollInputs();
+            SettingsView.Tick();
+        }
+        else
+        {
+            _listTop.PollInputs();
+            _header.PollInputs();
+            _content.PollInputs();
+        }
+
         if (_selectionDirty)
         {
             _selectionDirty = false;
-            RebuildElement();
-            RebuildListBody();
+            var now = Time.realtimeSinceStartup;
+            var rapid = now - _lastSelectionChangeTime < ContentDebounceSeconds;
+            _lastSelectionChangeTime = now;
+            RebuildElement(deferContent: rapid);
+            if (!TryRecolorCursorList())
+                RebuildListBody();
+        }
+        else if (_contentPending && Time.realtimeSinceStartup - _lastSelectionChangeTime >= ContentDebounceSeconds)
+        {
+            BuildPendingContent();
         }
         else if (_listMode == ListMode.Rules && RulesListIsStale())
         {
@@ -186,7 +253,6 @@ internal static class EditorWindow
             // The settings view covers the whole body, so only it and the title bar take input.
             if (!_dragging && input.GetMouseButtonDown(0) && !_titleBar.HandleClick(mouse))
                 _settings.HandleClick(mouse);
-            _settings.PollInputs();
             return;
         }
 
@@ -206,9 +272,6 @@ internal static class EditorWindow
             }
         }
 
-        _listTop.PollInputs();
-        _header.PollInputs();
-        _content.PollInputs();
         _builtTab?.Tick();
     }
 
@@ -274,6 +337,9 @@ internal static class EditorWindow
         _selectionDirty = true;
         _settings.Clear();
         _settings.Rect.gameObject.SetActive(true);
+        _settingsOpen = true;
+        _typingFrame = -1;
+        SettingsView.BeginEditing();
         SettingsView.Build(_settings, CloseSettings);
     }
 
@@ -281,8 +347,12 @@ internal static class EditorWindow
     {
         if (!SettingsOpen)
             return;
+        // Pick up a value typed on the frame the view closes, then write the file once.
+        _settings.PollInputs();
         _settings.Clear();
         _settings.Rect.gameObject.SetActive(false);
+        _settingsOpen = false;
+        SettingsView.EndEditing();
     }
 
     // ---- Left column -------------------------------------------------------------------------
@@ -324,10 +394,45 @@ internal static class EditorWindow
     private static void RebuildListBody()
     {
         _listBody.Clear();
+        _cursorRows.Clear();
+        _cursorListBuilt = false;
         if (_listMode == ListMode.Rules)
             RebuildRulesList();
         else
             RebuildCursorList();
+    }
+
+    private const float CursorRowHeight = 22f;
+    private const float CursorButtonsHeight = 64f;
+
+    private static int CursorListMaxRows =>
+        Mathf.Max(1, (int)((_listBody.Rect.rect.height - CursorButtonsHeight) / (CursorRowHeight + 2f)));
+
+    // Keep the selected row in view.
+    private static int CursorListFirst(int count, int maxRows) =>
+        Mathf.Clamp(PickerController.StackIndex - maxRows / 2, 0, Mathf.Max(0, count - maxRows));
+
+    /// <summary>
+    /// For a new selection within the stack the list already shows, with the same rows in view,
+    /// just moves the highlight. False if the list needs a rebuild.
+    /// </summary>
+    private static bool TryRecolorCursorList()
+    {
+        var stack = PickerController.Stack;
+        var selected = PickerController.Selected;
+        // Same selection again means it was closed by the game: its row text changes.
+        if (!_cursorListBuilt || _listMode != ListMode.UnderCursor || !ReferenceEquals(stack, _cursorListStack)
+            || selected == null || ReferenceEquals(selected, _cursorListSelected) || PickerController.StackIndex < 0
+            || CursorListFirst(stack.Count, CursorListMaxRows) != _cursorListFirst)
+            return false;
+
+        for (var i = 0; i < _cursorRows.Count && _cursorListFirst + i < stack.Count; i++)
+        {
+            var isSelected = stack[_cursorListFirst + i].IsSameAs(selected);
+            _cursorRows[i].SetColor(isSelected ? UiPanel.SelectedColor : UiPanel.MutedButtonColor);
+        }
+        _cursorListSelected = selected;
+        return true;
     }
 
     private static void RebuildCursorList()
@@ -335,9 +440,8 @@ internal static class EditorWindow
         var width = _listBody.Width;
         var stack = PickerController.Stack;
         var selected = PickerController.Selected;
-        const float rowHeight = 22f;
-        const float buttonsHeight = 64f;
-        var maxRows = Mathf.Max(1, (int)((_listBody.Rect.rect.height - buttonsHeight) / (rowHeight + 2f)));
+        const float rowHeight = CursorRowHeight;
+        var maxRows = CursorListMaxRows;
 
         var y = 0f;
         if (stack.Count == 0)
@@ -346,24 +450,28 @@ internal static class EditorWindow
                 TextAnchor.UpperLeft, UiPanel.DimTextColor);
         }
 
-        // Keep the selected row in view.
-        var first = Mathf.Clamp(PickerController.StackIndex - maxRows / 2, 0, Mathf.Max(0, stack.Count - maxRows));
+        var first = CursorListFirst(stack.Count, maxRows);
         for (var i = first; i < stack.Count && i < first + maxRows; i++)
         {
             var element = stack[i];
             var index = i;
             var isSelected = element.IsSameAs(selected);
-            _listBody.Button(string.Empty, 0, y, width, rowHeight, () => PickerController.SelectStackIndex(index),
-                isSelected ? UiPanel.SelectedColor : UiPanel.MutedButtonColor);
+            _cursorRows.Add(_listBody.Button(string.Empty, 0, y, width, rowHeight, () => PickerController.SelectStackIndex(index),
+                isSelected ? UiPanel.SelectedColor : UiPanel.MutedButtonColor));
             _listBody.Label($"{i + 1}. {PickedElement.Truncate(element.Name, 22)} {Tags(element)}", 6, y, width - 8, rowHeight, 12);
             y += rowHeight + 2f;
         }
 
+        _cursorListBuilt = true;
+        _cursorListStack = stack;
+        _cursorListSelected = selected;
+        _cursorListFirst = first;
+
         if (stack.Count > first + maxRows)
-            _listBody.Label($"+{stack.Count - first - maxRows} more ({CycleText()})", 0, y, width, 18, 11,
+            _listBody.Label($"+{stack.Count - first - maxRows} more ({PickerController.CycleText})", 0, y, width, 18, 11,
                 TextAnchor.MiddleLeft, UiPanel.DimTextColor);
 
-        var buttonsY = _listBody.Rect.rect.height - buttonsHeight + 6f;
+        var buttonsY = _listBody.Rect.rect.height - CursorButtonsHeight + 6f;
         var half = (width - 4f) / 2f;
         _listBody.Button("Parent", 0, buttonsY, half, 24, PickerController.SelectParent, UiPanel.MutedButtonColor);
         _listBody.Button("Child", half + 4f, buttonsY, half, 24, PickerController.SelectChild, UiPanel.MutedButtonColor);
@@ -386,7 +494,7 @@ internal static class EditorWindow
 
     private static void RebuildRulesList()
     {
-        _rulesListKey = RulesListKey();
+        RememberRulesListInputs();
 
         var width = _listBody.Width;
         var rules = CollectRules();
@@ -454,16 +562,24 @@ internal static class EditorWindow
         return result;
     }
 
-    private static bool RulesListIsStale() => RulesListKey() != _rulesListKey;
-
-    // Changes whenever any tab's rules change, or the rule open for editing changes.
-    private static string RulesListKey()
+    // Stale whenever any tab's rules change, or the rule open for editing changes. Checked every
+    // frame in Rules mode, so plain compares rather than building a key string.
+    private static bool RulesListIsStale()
     {
-        var key = new System.Text.StringBuilder();
-        foreach (var tab in _tabs)
-            key.Append(tab.RulesVersion).Append('|');
-        key.Append(_tabs.IndexOf(_builtTab)).Append('|').Append(_builtTab?.EditingRulePath);
-        return key.ToString();
+        for (var i = 0; i < _tabs.Count; i++)
+        {
+            if (_tabs[i].RulesVersion != _rulesListVersions[i])
+                return true;
+        }
+        return _builtTab != _rulesListTab || _builtTab?.EditingRulePath != _rulesListEditing;
+    }
+
+    private static void RememberRulesListInputs()
+    {
+        for (var i = 0; i < _tabs.Count; i++)
+            _rulesListVersions[i] = _tabs[i].RulesVersion;
+        _rulesListTab = _builtTab;
+        _rulesListEditing = _builtTab?.EditingRulePath;
     }
 
     private static List<RuleSummary> FilterRules(IReadOnlyList<RuleSummary> rules)
@@ -512,28 +628,33 @@ internal static class EditorWindow
 
     private static RectTransform FindElementForRule(string rulePath)
     {
+        if (string.IsNullOrEmpty(rulePath))
+            return null;
+
+        // Every match ends with the pattern's last segment (unless it has a '*'), so most
+        // elements are ruled out by name before building their whole path.
+        var leaf = PathPattern.LeafNameOf(rulePath);
+        var isWildcard = PathPattern.IsWildcard(rulePath);
         RectTransform wildcardMatch = null;
         foreach (var rect in UiCompat.FindObjectsOfType<RectTransform>())
         {
-            if (rect == null || !rect.gameObject.activeInHierarchy)
+            if (rect == null)
+                continue;
+            // EndsWith rather than ==: a name containing '/' only ends with the last segment.
+            if (leaf != null && !rect.name.EndsWith(leaf, StringComparison.Ordinal))
+                continue;
+            if (!rect.gameObject.activeInHierarchy)
                 continue;
 
             var path = ObjectHelper.GetGameObjectPath(rect.gameObject);
-            if (path.StartsWith(ElementPicker.EditorObjectPrefix))
+            if (ObjectHelper.IsEditorObjectPath(path))
                 continue;
-            if (path == rulePath)
+            if (string.Equals(path, rulePath, StringComparison.Ordinal))
                 return rect;
-            if (wildcardMatch == null && PathPattern.IsWildcard(rulePath) && PathPattern.IsMatch(rulePath, path))
+            if (wildcardMatch == null && isWildcard && PathPattern.IsMatch(rulePath, path))
                 wildcardMatch = rect;
         }
         return wildcardMatch;
-    }
-
-    private static string CycleText()
-    {
-        var hotkeys = PickerController.Hotkeys;
-        var keys = $"{UiEditorHotkeys.Describe(hotkeys.Previous)} / {UiEditorHotkeys.Describe(hotkeys.Next)}";
-        return hotkeys.WheelText != null ? $"{hotkeys.WheelText} or {keys}" : keys;
     }
 
     private static string Tags(PickedElement element)
@@ -549,7 +670,9 @@ internal static class EditorWindow
 
     // ---- Right side --------------------------------------------------------------------------
 
-    private static void RebuildElement()
+    /// <param name="deferContent">Build the tab content later (<see cref="BuildPendingContent"/>):
+    /// the selection is still changing quickly, e.g. wheel cycling through the stack.</param>
+    private static void RebuildElement(bool deferContent = false)
     {
         var element = PickerController.Selected;
         var rulePath = _openRulePath;
@@ -572,10 +695,27 @@ internal static class EditorWindow
             var hint = _listMode == ListMode.Rules
                 ? "Choose a rule on the left, or pick an element on screen."
                 : $"Press {UiEditorHotkeys.Describe(PickerController.Hotkeys.Pick)} over a UI element to pick it, " +
-                  $"then use {CycleText()} or the list to choose. Use Rules to browse saved rules.";
+                  $"then use {PickerController.CycleText} or the list to choose. Use Rules to browse saved rules.";
             _content.Label(hint, 0, 0, _content.Width, 60, 13, TextAnchor.UpperLeft, UiPanel.DimTextColor);
             return;
         }
+
+        // The old tab has been left and its widgets cleared, so nothing stale can be edited
+        // while the new content waits.
+        _pendingElement = element;
+        _pendingRulePath = rulePath;
+        _contentPending = true;
+        if (!deferContent)
+            BuildPendingContent();
+    }
+
+    private static void BuildPendingContent()
+    {
+        _contentPending = false;
+        var element = _pendingElement;
+        var rulePath = _pendingRulePath;
+        _pendingElement = null;
+        _pendingRulePath = null;
 
         var tab = _tabs[_tabIndex];
         tab.Build(_content, element, rulePath);
@@ -633,6 +773,13 @@ internal static class EditorWindow
         if (index == _tabIndex && _builtTab != null)
             return;
 
+        if (index == _tabIndex && _contentPending)
+        {
+            // Clicked the tab whose content is waiting on the debounce: just build it now.
+            BuildPendingContent();
+            return;
+        }
+
         LeaveTab();
         _tabIndex = index;
         _rulePage = 0;
@@ -647,6 +794,9 @@ internal static class EditorWindow
         _builtTab = null;
         _builtElement = null;
         _builtRulePath = null;
+        _contentPending = false;
+        _pendingElement = null;
+        _pendingRulePath = null;
     }
 
     private static void PollDrag(IInputSystem input, Vector2 mouse)

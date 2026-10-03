@@ -46,6 +46,8 @@ internal sealed class LayoutTab : IEditorTab
 
     private InputField[] _positionInputs;
     private InputField[] _sizeInputs;
+    // Both rows' "step" buttons share _nudgeIndex, so both relabel when either is clicked.
+    private readonly List<UiButton> _stepButtons = new List<UiButton>();
 
     public string Title => "Layout";
 
@@ -183,9 +185,12 @@ internal sealed class LayoutTab : IEditorTab
             || c.LayoutGroupSpacing != null;
     }
 
+    /// <summary>Rebuilds every widget. Only for structural changes (different fields or modes);
+    /// toggles and step buttons update their own button in place.</summary>
     private void Render()
     {
         _panel.Clear();
+        _stepButtons.Clear();
         var width = _panel.Width;
         var y = 0f;
 
@@ -234,13 +239,13 @@ internal sealed class LayoutTab : IEditorTab
         TriToggle("Size fitter", 3 * (toggleWidth + Gap), y, toggleWidth, () => _working.ContentSizeFitterEnabled, v => _working.ContentSizeFitterEnabled = v);
         y += RowStep;
         TriToggle("Layout group", 0, y, toggleWidth, () => _working.LayoutGroupEnabled, v => _working.LayoutGroupEnabled = v);
-        BoolToggle("Enforce", toggleWidth + Gap, y, toggleWidth, _working.IsEnforced(), v => _working.Enforce = v ? true : (bool?)null);
-        BoolToggle("Rule enabled", 2 * (toggleWidth + Gap), y, toggleWidth, _working.IsEnabled(), v => _working.Enabled = v ? (bool?)null : false);
+        BoolToggle("Enforce", toggleWidth + Gap, y, toggleWidth, () => _working.IsEnforced(), v => _working.Enforce = v ? true : (bool?)null);
+        BoolToggle("Rule enabled", 2 * (toggleWidth + Gap), y, toggleWidth, () => _working.IsEnabled(), v => _working.Enabled = v ? (bool?)null : false);
         TriToggle("Copy size", 3 * (toggleWidth + Gap), y, toggleWidth, () => _working.CopySizeFromSource, v => _working.CopySizeFromSource = v);
         y += RowStep;
-        BoolToggle("Counter-rotate children", 0, y, toggleWidth * 2 + Gap, _working.CounterRotateChildren == true,
+        BoolToggle("Counter-rotate children", 0, y, toggleWidth * 2 + Gap, () => _working.CounterRotateChildren == true,
             v => _working.CounterRotateChildren = v ? true : (bool?)null);
-        BoolToggle("Swap child size", 2 * (toggleWidth + Gap), y, toggleWidth * 2 + Gap, _working.CounterRotateSwapSize == true,
+        BoolToggle("Swap child size", 2 * (toggleWidth + Gap), y, toggleWidth * 2 + Gap, () => _working.CounterRotateSwapSize == true,
             v => _working.CounterRotateSwapSize = v ? true : (bool?)null);
         y += RowStep + 4f;
 
@@ -357,12 +362,15 @@ internal sealed class LayoutTab : IEditorTab
         _panel.Button(xLabel + "+", x + (w + 2), y, w, RowHeight, () => nudge(0, NudgeSteps[_nudgeIndex]), UiPanel.MutedButtonColor);
         _panel.Button(yLabel + "-", x + 2 * (w + 2), y, w, RowHeight, () => nudge(1, -NudgeSteps[_nudgeIndex]), UiPanel.MutedButtonColor);
         _panel.Button(yLabel + "+", x + 3 * (w + 2), y, w, RowHeight, () => nudge(1, NudgeSteps[_nudgeIndex]), UiPanel.MutedButtonColor);
-        _panel.Button($"step {NudgeSteps[_nudgeIndex]}", x + 4 * (w + 2) + 4, y, 60, RowHeight, () =>
+        _stepButtons.Add(_panel.Button(StepText(), x + 4 * (w + 2) + 4, y, 60, RowHeight, () =>
         {
             _nudgeIndex = (_nudgeIndex + 1) % NudgeSteps.Length;
-            Render();
-        }, UiPanel.MutedButtonColor);
+            foreach (var button in _stepButtons)
+                button.SetText(StepText());
+        }, UiPanel.MutedButtonColor));
     }
+
+    private string StepText() => $"step {NudgeSteps[_nudgeIndex]}";
 
     private void Nudge(ref float[] offset, ref float[] absolute, bool isOffset, float[] original, int axis, float delta, InputField[] inputs)
     {
@@ -530,40 +538,52 @@ internal sealed class LayoutTab : IEditorTab
 
     private void FitModeField(string label, float x, float y, float width, Func<string> get, Action<string> set)
     {
-        var value = get();
         var labelWidth = 66f;
         _panel.Label(label, x, y, labelWidth, RowHeight, 11, TextAnchor.MiddleLeft, UiPanel.DimTextColor);
-        _panel.Button(string.IsNullOrEmpty(value) ? "(default)" : value, x + labelWidth, y, width - labelWidth, RowHeight, () =>
-            EditorWindow.ShowChoice(label, FitModeOptions, value ?? string.Empty, picked =>
+        UiButton button = null;
+        button = _panel.Button(FitModeText(get()), x + labelWidth, y, width - labelWidth, RowHeight, () =>
+            EditorWindow.ShowChoice(label, FitModeOptions, get() ?? string.Empty, picked =>
             {
                 set(string.IsNullOrEmpty(picked) ? null : picked);
                 MarkDirty();
-                Render();
-            }), string.IsNullOrEmpty(value) ? UiPanel.MutedButtonColor : UiPanel.ButtonColor);
+                var value = get();
+                button.Set(FitModeText(value), string.IsNullOrEmpty(value) ? UiPanel.MutedButtonColor : UiPanel.ButtonColor);
+            }), string.IsNullOrEmpty(get()) ? UiPanel.MutedButtonColor : UiPanel.ButtonColor);
     }
+
+    private static string FitModeText(string value) => string.IsNullOrEmpty(value) ? "(default)" : value;
 
     private void TriToggle(string label, float x, float y, float width, Func<bool?> get, Action<bool?> set)
     {
         var value = get();
-        var text = $"{label}: {(value == null ? "–" : value.Value ? "On" : "Off")}";
-        _panel.Button(text, x, y, width, RowHeight, () =>
+        UiButton button = null;
+        button = _panel.Button(TriText(label, value), x, y, width, RowHeight, () =>
         {
             // unset -> On -> Off -> unset
-            set(value == null ? true : value.Value ? false : (bool?)null);
+            var current = get();
+            set(current == null ? true : current.Value ? false : (bool?)null);
             MarkDirty();
-            Render();
+            var updated = get();
+            button.Set(TriText(label, updated), updated == null ? UiPanel.MutedButtonColor : UiPanel.ButtonColor);
         }, value == null ? UiPanel.MutedButtonColor : UiPanel.ButtonColor);
     }
 
-    private void BoolToggle(string label, float x, float y, float width, bool value, Action<bool> set)
+    private static string TriText(string label, bool? value) => $"{label}: {(value == null ? "–" : value.Value ? "On" : "Off")}";
+
+    private void BoolToggle(string label, float x, float y, float width, Func<bool> get, Action<bool> set)
     {
-        _panel.Button($"{label}: {(value ? "On" : "Off")}", x, y, width, RowHeight, () =>
+        var value = get();
+        UiButton button = null;
+        button = _panel.Button(BoolText(label, value), x, y, width, RowHeight, () =>
         {
-            set(!value);
+            set(!get());
             MarkDirty();
-            Render();
+            var updated = get();
+            button.Set(BoolText(label, updated), updated ? UiPanel.ButtonColor : UiPanel.MutedButtonColor);
         }, value ? UiPanel.ButtonColor : UiPanel.MutedButtonColor);
     }
+
+    private static string BoolText(string label, bool value) => $"{label}: {(value ? "On" : "Off")}";
 
     private void MarkDirty()
     {
@@ -601,9 +621,12 @@ internal sealed class LayoutTab : IEditorTab
             return;
         }
 
+        var savedBefore = _savedPath;
         var file = SaveCore();
         EditorWindow.SetStatus($"Saved to {Path.GetFileName(file)}.");
-        Render();
+        // The rule info line and Delete button depend on which rule is saved; nothing else changes.
+        if (savedBefore != _savedPath)
+            Render();
     }
 
     private string SaveCore()

@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 namespace FanslationStudio.Plugins.Support;
@@ -22,18 +24,37 @@ public static class ObjectHelper
         return GetGameObjectPath(asset);
     }
 
+    // Reused by GetGameObjectPath: building the path back to front with string concatenation
+    // copies the whole tail at every level (O(depth^2)), and it runs on hot text/sprite hooks.
+    [ThreadStatic] private static List<string> _pathNames;
+    [ThreadStatic] private static StringBuilder _pathBuilder;
+
     // Helper method to get the full path of a GameObject in the hierarchy
     public static string GetGameObjectPath(GameObject obj)
     {
-        string path = obj.name;
-        Transform parent = obj.transform.parent;
+        var names = _pathNames ??= new List<string>(16);
+        var builder = _pathBuilder ??= new StringBuilder(128);
+        names.Clear();
+        builder.Length = 0;
 
-        while (parent != null)
+        names.Add(obj.name);
+        for (var parent = obj.transform.parent; parent != null; parent = parent.parent)
+            names.Add(parent.name);
+
+        for (var i = names.Count - 1; i >= 0; i--)
         {
-            path = parent.name + "/" + path;
-            parent = parent.parent;
+            builder.Append(names[i]);
+            if (i > 0)
+                builder.Append('/');
         }
 
-        return path;
+        names.Clear();
+        return builder.ToString();
+    }
+
+    /// <summary>True if the path belongs to the UI Editor's own overlay (ordinal, so it's cheap on hot paths).</summary>
+    public static bool IsEditorObjectPath(string path)
+    {
+        return path != null && path.StartsWith(EditorObjectPrefix, StringComparison.Ordinal);
     }
 }

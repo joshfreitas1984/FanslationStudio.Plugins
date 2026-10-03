@@ -5,6 +5,7 @@ using FanslationStudio.Plugins.Shared;
 using FanslationStudio.Plugins.SharpYaml;
 using FanslationStudio.Plugins.TextResizer;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using FanslationStudio.Plugins.UnityShared;
 
 namespace FanslationStudio.Plugins.Plugins;
@@ -45,7 +46,8 @@ public class TextResizerPlugin : BaseUnityPlugin
         try
         {
             _service.EnsurePatched();
-            _service.CheckForSceneChange();
+            // Read here, not in Shared: this host compiles against the real UnityEngine.
+            _service.CheckForSceneChange(SceneManager.GetActiveScene().handle);
         }
         catch (Exception ex)
         {
