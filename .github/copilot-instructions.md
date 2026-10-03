@@ -39,10 +39,28 @@ One plugin (`UIEditor`) for text resizers, layouts and sprites. Rules live in se
 keyed by hierarchy path: `BepInEx/resizers/`, `layouts/`, `sprites2/` (PNGs in `sprites2/dumped/`).
 
 - `UiEditorHost` is the entry point: each host calls `Initialize` then `Tick` once per frame
-  (Mono: `Canvas.willRenderCanvases`; IL2CPP: the `Time.deltaTime` postfix below).
+  (Mono: `Canvas.willRenderCanvases`; IL2CPP: the shared `Il2CppFrameTick`, see below).
+  `Tick` guards itself with `Time.frameCount`: `Canvas.ForceUpdateCanvases()` raises
+  `willRenderCanvases` again within the same frame, which would otherwise redo the per-frame work
+  and handle the same click/key press twice.
 - `UiHooks` owns the shared Harmony postfixes (`Graphic.OnEnable`, `GameObject.SetActive`,
-  `Image.sprite` setter), patched lazily on the first tick and raised as C# events that
-  `LayoutApplier`/`SpriteApplier` subscribe to.
+  `Image.sprite` setter, `Text.text`/`TMP_Text.text` setters), raised as C# events that
+  `LayoutApplier`/`SpriteApplier` subscribe to. Patched from the first tick that has rules (every
+  call to a patched method pays for the hook, under IL2CPP a native-to-managed transition), the
+  text setters only once layouts have rules; newly patching triggers a `ReapplyAll`.
+  `SetActive(true)` is raised even for already-active objects (see "Hierarchy paths" below), at
+  most once per object per frame.
+- Hierarchy paths: every apply builds the element's path fresh (`ObjectHelper.GetGameObjectPath`,
+  O(depth)) - don't cache paths across hook calls. Games instantiate, pool, move and rename rows
+  freely, and a stale cached path silently applies the wrong rule (e.g. the global `/*`).
+  Use `ContractRepository.CouldMatchName(name)` to skip building paths for elements whose own
+  name can't match any rule.
+- Instantiate-then-move: many games spawn UI as `Instantiate(prefab)` (at the scene root, so
+  every OnEnable sees `X(Clone)/...`), then `SetParent` and rename it in the same frame, with no
+  further signal (e.g. Wanxiang's `MenuManager.LoadMenu`). The resizer, layout and sprite
+  appliers therefore queue anything enabled under a root named `...(Clone)` and re-apply it with
+  its final path on the next tick. Startup UI enabled before the hooks exist is covered by one
+  full apply right after patching.
 - `ContractRepository<T>` (Shared) loads a folder of YAML files alphabetically (first key wins),
   remembers which file owns each rule, and rewrites only that file on save/delete. Previews are
   in-memory until saved.
@@ -158,8 +176,9 @@ Do **not** reintroduce these without first re-verifying against a newer/older Il
 6. **Directly subscribing a method group to `SceneManager.sceneLoaded`** fails under IL2CPP with
    a `MissingMethodException`, because the interop-generated `UnityAction<T1,T2>` type doesn't
    support the standard `(object, IntPtr)` delegate constructor the C# compiler emits for a method
-   group. (Documented in `TextResizerService`'s `_lastSceneBuildIndex` polling comment — use
-   polling instead of subscribing.)
+   group. Use polling instead of subscribing: `TextResizerService.CheckForSceneChange(handle)`,
+   with each host reading `SceneManager.GetActiveScene().handle` (compare handles, not
+   `buildIndex` - scenes not in Build Settings all report -1).
 7. **Passing a plain managed array (e.g. `Vector3[]`) as an "output"/fill-in parameter to an
    unhollowed IL2CPP method silently loses the results.** Confirmed culprit:
    `RectTransform.GetWorldCorners(Vector3[])` (now `UiCompat.GetWorldCorners`) - compiled
@@ -188,10 +207,13 @@ Do **not** reintroduce these without first re-verifying against a newer/older Il
 `AddComponent<T>`/`ClassInjector` (unsafe, see above), use a Harmony postfix patch on a concrete,
 non-generic engine method/property that's called every frame by native code. Harmony patch
 application only needs ordinary `MethodInfo` resolution + an IL detour — it does not go through
-`GenericMethod_GetMethod_Hook`. Current implementation (`TextResizerPlugin.Load()`, and the same
-pattern in `UiEditorPlugin`): patch
-`UnityEngine.Time.deltaTime`'s getter with a postfix, throttled to once per frame via
-`Time.frameCount` (since `deltaTime` may be read many times per frame by other game code).
+`GenericMethod_GetMethod_Hook`. Current implementation: `Il2CppFrameTick` (in the IL2CPP host)
+patches `UnityEngine.Time.deltaTime`'s getter with a single postfix, throttled to once per frame
+via `Time.frameCount`, and calls every registered listener. Plugins call
+`Il2CppFrameTick.Register(...)` from `Load()` (`TextResizerPlugin`, `UiEditorPlugin`) rather than
+patching `deltaTime` themselves: game code can read it thousands of times per frame, and each
+read runs every postfix on it. (`StringPatcherPlugin` still has its own one-shot postfix; it isn't
+used under IL2CPP.)
 
 ## Confirmed-safe pattern for building real uGUI at runtime under IL2CPP (spike, 2026-08-29)
 
@@ -263,6 +285,14 @@ Key points for building on this:
   called from `TextResizerPlugin.RunUpdate()` alongside the existing service patch. The simpler
   postfixes that only call `ApplyResizing`/`ApplyResizingToLegacyText` directly (no
   `GetComponent`/tree-walk) remain in `Shared` since they don't touch the problematic APIs.
+  Current behaviour: the `SetActive(true)` walk runs on every call, even for already-active
+  objects (Legend of Dragon Heir relies on it: panels are spawned, reparented, then "shown" with
+  `SetActive(true)`), deduped to once per object per frame; the `CanvasGroup.alpha` walk only runs
+  when alpha goes from <= 0 to visible (fades set it every frame). Inactive children are skipped.
+- **`is`/`as` on a Harmony `__instance` under IL2CPP**: the wrapper Harmony passes is typed as the
+  *patched* method's declaring type, so `__instance is TextMeshProUGUI` in a `TMP_Text.text`
+  setter postfix is always false. `Shared` can't call `TryCast`, so the cast goes through the host
+  (`IBehaviourAttacher.AsTextMeshProUGUI`: `as` on Mono, `TryCast` on IL2CPP).
 - **Follow-up bug found in the above fix**: `Il2CppType.From(componentType)`-based
   `transform.GetComponent(...)` has been observed to occasionally return a `Component` that is
   *not* actually an instance of the requested type (`InvalidCastException` at the postfix's

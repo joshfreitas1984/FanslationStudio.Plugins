@@ -157,7 +157,7 @@ Only strings matching `ForeignLanguagePattern` (under `[Dumping]` in the UI Edit
 
 ## Prefab Text Replacer
 
-Replaces text baked into prefabs and scenes (TextMeshPro and legacy UGUI `Text`) using translated prefab text files. Mono games only (BepInEx 5 and BepInEx 6 Mono) - not available for IL2CPP.
+Replaces text baked into prefabs and scenes (TextMeshPro and legacy UGUI `Text`, including input fields' default text) using translated prefab text files. Mono games only (BepInEx 5 and BepInEx 6 Mono) - not available for IL2CPP.
 
 Set `Enabled = true` under `[PrefabTextReplacer]` in the config, then put the translated files in `BepInEx/<ResourcePath>/` (`ResourcePath` defaults to `./english`). Every file matching `FilePattern` (default `*prefabText*`, ignoring case, e.g. `prefabText.txt`, `menus.PrefabText.txt`) is loaded alphabetically; if two files translate the same text, the later one wins. The Dynamic String Patcher works the same way with `*dynamicStrings*`:
 
