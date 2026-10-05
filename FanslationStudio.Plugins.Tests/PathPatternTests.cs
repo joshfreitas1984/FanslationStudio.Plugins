@@ -24,6 +24,8 @@ namespace FanslationStudio.Plugins.Tests
         [InlineData("[UI]/MainUI/Layer_*/ActionInfo/ContributionValue", "U/MainUI/Layer_2/ActionInfo/ContributionValue", false)]
         [InlineData("Canvas/a.b/*", "Canvas/axb/Text", false)]
         [InlineData("Canvas/a+b/*", "Canvas/a+b/Text", true)]
+        [InlineData("[UI]/*/StatusPanel/Container/Buttons/LeftButtons/StatusButton_*/*/Text (TMP)",
+                    "[UI]/MainUI/StatusPanel/Container/Buttons/LeftButtons/StatusButton_Items/Label/Text (TMP)", true)]
         // Anchored: no longer matches mid-path or children
         [InlineData("UI/Layer_1/Buttons/*/Text", "[UI]/MainUI/Layer_1/Buttons/B/Text", false)]
         [InlineData("Canvas/*/Title", "Canvas/Panel/Title/Child", false)]

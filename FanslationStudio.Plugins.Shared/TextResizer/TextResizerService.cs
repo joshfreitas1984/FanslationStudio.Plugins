@@ -1168,11 +1168,22 @@ public class TextResizerService
     private static void RebuildWildcardResizers()
     {
         WildcardResizers.Clear();
+        TextResizerContract matchAll = null;
         foreach (var key in ResizersOrder)
         {
-            if (Resizers.TryGetValue(key, out var resizer) && PathPattern.IsWildcard(resizer.Path))
+            if (!Resizers.TryGetValue(key, out var resizer) || !PathPattern.IsWildcard(resizer.Path))
+                continue;
+
+            // The global "/*" fallback always goes last: file load order can't be relied on to
+            // (e.g. "zzzGlobalResizer.yaml" sorts before "[UI]_*.yaml", since '[' follows 'Z'),
+            // and it matches everything, so anywhere earlier it would shadow every other wildcard.
+            if (resizer.Path == MatchAllPattern)
+                matchAll = resizer;
+            else
                 WildcardResizers.Add(resizer);
         }
+        if (matchAll != null)
+            WildcardResizers.Add(matchAll);
         _wildcardResizersDirty = false;
     }
 
