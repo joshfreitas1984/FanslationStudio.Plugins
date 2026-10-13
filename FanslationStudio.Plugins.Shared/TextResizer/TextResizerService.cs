@@ -633,6 +633,7 @@ public class TextResizerService
                 metadata.OriginalAllowWordWrap = textComponent.enableWordWrapping;
                 metadata.OriginalAllowAutoSizing = textComponent.enableAutoSizing;
                 metadata.OriginalFontSize = textComponent.fontSize;
+                metadata.OriginalColor = textComponent.color;
             }
 
             // Set this so we can debug bad resizers
@@ -665,6 +666,21 @@ public class TextResizerService
             else if (resizer.FontPercentage != null)
             {
                 textComponent.fontSize = metadata.OriginalFontSize * resizer.FontPercentage ?? 1;
+            }
+
+            // Text colour. Only restored when a resizer previously set it, so a game that tints
+            // its own text isn't fought by resizers that don't mention colour.
+            var color = ParseColor(resizer);
+            if (color.HasValue)
+            {
+                if (textComponent.color != color.Value)
+                    textComponent.color = color.Value;
+                metadata.ColorOverridden = true;
+            }
+            else if (metadata.ColorOverridden)
+            {
+                textComponent.color = metadata.OriginalColor;
+                metadata.ColorOverridden = false;
             }
 
             // Text Alignment
@@ -804,6 +820,9 @@ public class TextResizerService
             rectTransform.sizeDelta = new Vector2(metadata.OriginalWidth, metadata.OriginalHeight);
 
             textComponent.fontSize = metadata.OriginalFontSize;
+            if (metadata.ColorOverridden)
+                textComponent.color = metadata.OriginalColor;
+            metadata.ColorOverridden = false;
             textComponent.alignment = metadata.OriginalAlignment;
             textComponent.overflowMode = metadata.OriginalOverflowMode;
             textComponent.enableWordWrapping = metadata.OriginalAllowWordWrap;
@@ -890,6 +909,7 @@ public class TextResizerService
                 metadata.OriginalHorizontalOverflow = textComponent.horizontalOverflow;
                 metadata.OriginalVerticalOverflow = textComponent.verticalOverflow;
                 metadata.OriginalFontSize = textComponent.fontSize;
+                metadata.OriginalColor = textComponent.color;
                 metadata.OriginalResizeTextForBestFit = textComponent.resizeTextForBestFit;
                 metadata.OriginalResizeTextMinSize = textComponent.resizeTextMinSize;
                 metadata.OriginalResizeTextMaxSize = textComponent.resizeTextMaxSize;
@@ -925,6 +945,21 @@ public class TextResizerService
             else if (resizer.FontPercentage != null)
             {
                 textComponent.fontSize = (int)(metadata.OriginalFontSize * resizer.FontPercentage ?? 1);
+            }
+
+            // Text colour. Only restored when a resizer previously set it, so a game that tints
+            // its own text isn't fought by resizers that don't mention colour.
+            var color = ParseColor(resizer);
+            if (color.HasValue)
+            {
+                if (textComponent.color != color.Value)
+                    textComponent.color = color.Value;
+                metadata.ColorOverridden = true;
+            }
+            else if (metadata.ColorOverridden)
+            {
+                textComponent.color = metadata.OriginalColor;
+                metadata.ColorOverridden = false;
             }
 
             // Text Alignment - convert from TMP alignment to legacy Text alignment
@@ -1049,6 +1084,9 @@ public class TextResizerService
             rectTransform.sizeDelta = new Vector2(metadata.OriginalWidth, metadata.OriginalHeight);
 
             textComponent.fontSize = metadata.OriginalFontSize;
+            if (metadata.ColorOverridden)
+                textComponent.color = metadata.OriginalColor;
+            metadata.ColorOverridden = false;
             textComponent.alignment = metadata.OriginalAlignment;
             textComponent.horizontalOverflow = metadata.OriginalHorizontalOverflow;
             textComponent.verticalOverflow = metadata.OriginalVerticalOverflow;
@@ -1255,6 +1293,47 @@ public class TextResizerService
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int GetInstanceIdCore(UnityEngine.Object obj) => obj.GetInstanceID();
+
+    private static readonly Dictionary<string, Color?> ParsedColors = new(StringComparer.Ordinal);
+
+    // "#RRGGBB" or "#RRGGBBAA" (# optional). Parsed by hand rather than ColorUtility so Shared
+    // only touches the Color struct. Parsed once per distinct value, like alignments.
+    private static Color? ParseColor(TextResizerContract resizer)
+    {
+        var value = resizer.Color;
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        if (!ParsedColors.TryGetValue(value, out var parsed))
+        {
+            parsed = TryParseHexColor(value, out var color) ? color : null;
+            if (parsed == null)
+                _logger.LogWarning($"Invalid color value: {value} on {resizer.Path} (use #RRGGBB or #RRGGBBAA)");
+            if (ParsedColors.Count >= MaxParsedValues)
+                ParsedColors.Clear();
+            ParsedColors[value] = parsed;
+        }
+        return parsed;
+    }
+
+    private static readonly char[] HexPrefix = { '#' };
+
+    public static bool TryParseHexColor(string value, out Color color)
+    {
+        color = default;
+        var hex = value.Trim().TrimStart(HexPrefix);
+        if ((hex.Length != 6 && hex.Length != 8)
+            || !int.TryParse(hex.Substring(0, 6), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var rgb))
+            return false;
+
+        var alpha = 255;
+        if (hex.Length == 8
+            && !int.TryParse(hex.Substring(6, 2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out alpha))
+            return false;
+
+        color = new Color(((rgb >> 16) & 0xFF) / 255f, ((rgb >> 8) & 0xFF) / 255f, (rgb & 0xFF) / 255f, alpha / 255f);
+        return true;
+    }
 
     private static TextAlignmentOptions? ParseAlignment(TextResizerContract resizer)
     {

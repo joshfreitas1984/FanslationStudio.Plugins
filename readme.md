@@ -142,6 +142,7 @@ Here are all the things you can do: (Not including it will keep the controls def
   characterSpacing: 0.0       # Character spacing for text
   wordSpacing: 0.0            # Word spacing for text
   fontPercentage: 0.70        # Percentage of font size to use (replaces max/min font size if set above 0)
+  color: "#FFD24D"           # Text colour as #RRGGBB or #RRGGBBAA (6 digits = fully opaque). Removing it restores the original
   alignment: Center           # Control alignment on screen for TextMeshProGUI
   overflow: Overflow          # Overflow mode for TextMeshProGUI
 ```

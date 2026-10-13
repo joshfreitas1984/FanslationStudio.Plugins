@@ -314,6 +314,61 @@ internal static class EditorWindow
         }
     }
 
+    /// <summary>
+    /// Shows a palette over the tab content: hue columns by shade rows, plus greys. onPick gets
+    /// "#RRGGBB", or "" for "leave the colour alone". Swatches are plain buttons, since the panel
+    /// only supports clicks (no sliders or dragging).
+    /// </summary>
+    public static void ShowColorPicker(string title, Action<string> onPick)
+    {
+        CloseChoice();
+
+        var content = _content.Rect;
+        var width = content.rect.width;
+        var height = content.rect.height;
+        _popup = UiPanel.Create(_window, "Popup", content.anchoredPosition.x, -content.anchoredPosition.y, width, height,
+            new Color(0.12f, 0.12f, 0.16f, 0.99f));
+
+        _popup.Label(title, 8, 4, width - 230, 22, 13, TextAnchor.MiddleLeft, null, FontStyle.Bold);
+        _popup.Button("Original colour", width - 220, 4, 126, 22, () =>
+        {
+            CloseChoice();
+            onPick(string.Empty);
+        }, UiPanel.MutedButtonColor);
+        _popup.Button("Cancel", width - 90, 4, 82, 22, CloseChoice, UiPanel.MutedButtonColor);
+
+        const int columns = 12;
+        const float gap = 3f;
+        const float cellHeight = 26f;
+        var cellWidth = (width - 16f - (columns - 1) * gap) / columns;
+        var shades = new[] { new Vector2(0.35f, 1f), new Vector2(0.65f, 1f), new Vector2(1f, 1f), new Vector2(1f, 0.75f), new Vector2(1f, 0.5f), new Vector2(1f, 0.3f) };
+
+        var y = 34f;
+        for (var row = 0; row < shades.Length + 1; row++)
+        {
+            for (var column = 0; column < columns; column++)
+            {
+                var color = row < shades.Length
+                    ? Color.HSVToRGB(column / (float)columns, shades[row].x, shades[row].y)
+                    : Color.HSVToRGB(0f, 0f, 1f - column / (float)(columns - 1));
+                var hex = ToHex(color);
+                _popup.Button(string.Empty, 8f + column * (cellWidth + gap), y, cellWidth, cellHeight, () =>
+                {
+                    CloseChoice();
+                    onPick(hex);
+                }, color);
+            }
+            y += cellHeight + gap;
+        }
+    }
+
+    public static string ToHex(Color color)
+    {
+        return "#" + ((int)Mathf.Round(color.r * 255f)).ToString("X2")
+            + ((int)Mathf.Round(color.g * 255f)).ToString("X2")
+            + ((int)Mathf.Round(color.b * 255f)).ToString("X2");
+    }
+
     private static void CloseChoice()
     {
         if (_popup == null)

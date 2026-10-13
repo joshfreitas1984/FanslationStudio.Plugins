@@ -26,4 +26,8 @@ public interface ILegacyTextMetadata
     float AdjustY { get; set; }
     float AdjustWidth { get; set; }
     float AdjustHeight { get; set; }
+
+    // Colour before any resizer touched it, and whether a resizer has changed it since.
+    Color OriginalColor { get; set; }
+    bool ColorOverridden { get; set; }
 }

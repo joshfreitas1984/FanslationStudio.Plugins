@@ -24,6 +24,9 @@ public record TextResizerContract
 
     public bool? AllowAutoSizing;
 
+    // Text colour as hex: "#RRGGBB" or "#RRGGBBAA" (the # is optional). Blank leaves the colour alone.
+    public string Color = string.Empty;
+
     // Custom Flags
 
     // To deal with some of the wierdness in the game

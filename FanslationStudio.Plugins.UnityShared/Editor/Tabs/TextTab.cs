@@ -216,6 +216,27 @@ internal sealed class TextTab : IEditorTab
         }
         y += RowStep + 4f;
 
+        _panel.Label("Colour", 0, y, LabelWidth, RowHeight);
+        const float swatchWidth = 28f;
+        const float pickWidth = 54f;
+        var inputWidth = width - LabelWidth - swatchWidth - pickWidth - 2 * Gap;
+        var swatch = _panel.Box(LabelWidth + inputWidth + Gap, y, swatchWidth, RowHeight, SwatchColor(_working.Color));
+        var colorInput = _panel.Input(_working.Color, LabelWidth, y, inputWidth, RowHeight, text =>
+        {
+            _working.Color = text.Trim();
+            swatch.color = SwatchColor(_working.Color);
+            MarkDirty();
+        }, "#RRGGBB or #RRGGBBAA, blank = unchanged");
+        _panel.Button("Pick", LabelWidth + inputWidth + swatchWidth + 2 * Gap, y, pickWidth, RowHeight, () =>
+            EditorWindow.ShowColorPicker("Text colour", picked =>
+            {
+                _working.Color = picked;
+                _panel.SetInputText(colorInput, picked);
+                swatch.color = SwatchColor(picked);
+                MarkDirty();
+            }));
+        y += RowStep;
+
         var half = (width - LabelWidth - Gap) / 2f;
         _panel.Label("Alignment", 0, y, LabelWidth, RowHeight);
         ChoiceButton(LabelWidth, y, half, "Alignment", () => _working.Alignment, AlignmentOptions, v => _working.Alignment = v);
@@ -529,7 +550,7 @@ internal sealed class TextTab : IEditorTab
     private static bool HasAnySetting(TextResizerContract c)
     {
         return c.IdealFontSize != null || c.FontPercentage != null || c.MinFontSize != null || c.MaxFontSize != null
-            || !string.IsNullOrEmpty(c.Alignment) || !string.IsNullOrEmpty(c.OverflowMode)
+            || !string.IsNullOrEmpty(c.Alignment) || !string.IsNullOrEmpty(c.Color) || !string.IsNullOrEmpty(c.OverflowMode)
             || c.AllowWordWrap != null || c.AllowAutoSizing != null || c.AllowLeftTrimText
             || c.AdjustX != 0 || c.AdjustY != 0 || c.AdjustWidth != 0 || c.AdjustHeight != 0
             || c.LineSpacing != null || c.CharacterSpacing != null || c.WordSpacing != null;
@@ -603,6 +624,14 @@ internal sealed class TextTab : IEditorTab
 
     // Current values as placeholders; blank when there's no element to read them from.
     private string Current(float value) => _element != null ? Format(value) : string.Empty;
+
+    // The colour shown beside the hex field: the value itself, or a neutral grey when blank/invalid.
+    private static Color SwatchColor(string hex)
+    {
+        return TextResizerService.TryParseHexColor(hex ?? string.Empty, out var color)
+            ? new Color(color.r, color.g, color.b, 1f)
+            : new Color(0.28f, 0.28f, 0.32f, 1f);
+    }
 
     private static string Format(float value) => value.ToString("0.###", CultureInfo.InvariantCulture);
 

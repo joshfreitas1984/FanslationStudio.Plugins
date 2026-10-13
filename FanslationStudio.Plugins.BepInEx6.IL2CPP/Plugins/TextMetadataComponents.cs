@@ -41,6 +41,9 @@ public class TextMetadataComponent : ITextMetadata
     public float AdjustY { get; set; }
     public float AdjustWidth { get; set; }
     public float AdjustHeight { get; set; }
+
+    public Color OriginalColor { get; set; }
+    public bool ColorOverridden { get; set; }
 }
 
 public class LegacyTextMetadataComponent : ILegacyTextMetadata
@@ -66,4 +69,7 @@ public class LegacyTextMetadataComponent : ILegacyTextMetadata
     public float AdjustY { get; set; }
     public float AdjustWidth { get; set; }
     public float AdjustHeight { get; set; }
+
+    public Color OriginalColor { get; set; }
+    public bool ColorOverridden { get; set; }
 }
