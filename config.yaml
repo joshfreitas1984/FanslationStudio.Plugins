@@ -28,3 +28,10 @@ games:
     releasePath: '\ReleaseFolder\Files'
     export: false
     version: 5
+  - name: "PathOfKungfu"
+    gamePath: 'G:\SteamLibrary\steamapps\common\The road of Jianghu'
+    managedPath: '\daojianjianghulu_Data\Managed'
+    pluginPath: '\BepInEx\plugins'
+    releasePath: '\ReleaseFolder\Files'
+    export: true
+    version: 5
