@@ -21,11 +21,11 @@ public class PrefabTextReplacerPlugin : BaseUnityPlugin
 
     private void Awake()
     {
-        var enabled = PluginConfig.File.Bind("PrefabTextReplacer", "Enabled", false,
+        var enabled = ReplacerConfig.File.Bind("PrefabTextReplacer", "Enabled", false,
             "Replace text that is hardcoded in prefabs, using the translated prefab text files").Value;
-        var resourcePath = PluginConfig.File.Bind("PrefabTextReplacer", "ResourcePath", "./english",
+        var resourcePath = ReplacerConfig.File.Bind("PrefabTextReplacer", "ResourcePath", "./english",
             "Folder (relative to BepInEx/) containing the translated prefab text files").Value;
-        var filePattern = PluginConfig.File.Bind("PrefabTextReplacer", "FilePattern", PrefabTextContract.DefaultFilePattern,
+        var filePattern = ReplacerConfig.File.Bind("PrefabTextReplacer", "FilePattern", PrefabTextContract.DefaultFilePattern,
             "Translated prefab text files to load from ResourcePath (* matches anything, case is ignored). Every match is loaded, alphabetically; later files win").Value;
 
         if (!enabled)

@@ -19,9 +19,9 @@ Every plugin's settings live in one file, `BepInEx/config/FanslationStudio.Plugi
 | `[Dumping]` | `ForeignLanguagePattern`, `Assemblies` (default `Assembly-CSharp*.dll`) |
 | `[Updates]` | `Enabled`, `PromptDelaySeconds` (default 15) |
 | `[TextResizer]` | `Enabled` |
-| `[DynamicStringPatcher]` | `Enabled`, `ResourcePath`, `FilePattern` (default `*dynamicStrings*`) |
-| `[PrefabTextReplacer]` | `Enabled`, `ResourcePath`, `FilePattern` (default `*prefabText*`) |
 
+> **Replacers:** `[DynamicStringPatcher]` and `[PrefabTextReplacer]` (`Enabled`, `ResourcePath`, `FilePattern`; defaults `*dynamicStrings*` / `*prefabText*`) live in their own file, `BepInEx/config/FanslationStudio.Plugins.Replacers.cfg`, so a game can ship it with them switched on. They are not shown in Plugin settings.
+>
 > **Changed:** TextResizer, DynamicStringPatcher and PrefabTextReplacer used to have their own `.cfg` files. Those are no longer read - copy any values you changed into the sections above (`TextResizerEnabled` is now `[TextResizer] Enabled`).
 
 ## Update prompt
@@ -160,7 +160,7 @@ Only strings matching `ForeignLanguagePattern` (under `[Dumping]` in the UI Edit
 
 Replaces text baked into prefabs and scenes (TextMeshPro and legacy UGUI `Text`, including input fields' default text) using translated prefab text files. Mono games only (BepInEx 5 and BepInEx 6 Mono) - not available for IL2CPP.
 
-Set `Enabled = true` under `[PrefabTextReplacer]` in the config, then put the translated files in `BepInEx/<ResourcePath>/` (`ResourcePath` defaults to `./english`). Every file matching `FilePattern` (default `*prefabText*`, ignoring case, e.g. `prefabText.txt`, `menus.PrefabText.txt`) is loaded alphabetically; if two files translate the same text, the later one wins. The Dynamic String Patcher works the same way with `*dynamicStrings*`:
+Set `Enabled = true` under `[PrefabTextReplacer]` in `FanslationStudio.Plugins.Replacers.cfg`, then put the translated files in `BepInEx/<ResourcePath>/` (`ResourcePath` defaults to `./english`). Every file matching `FilePattern` (default `*prefabText*`, ignoring case, e.g. `prefabText.txt`, `menus.PrefabText.txt`) is loaded alphabetically; if two files translate the same text, the later one wins. The Dynamic String Patcher works the same way with `*dynamicStrings*`:
 
 ```yaml
 - raw: 开始游戏
