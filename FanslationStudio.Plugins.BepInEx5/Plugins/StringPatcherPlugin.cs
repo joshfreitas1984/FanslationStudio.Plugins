@@ -46,6 +46,9 @@ public class StringPatcherPlugin : BaseUnityPlugin
         var filePattern = ReplacerConfig.File.Bind("DynamicStringPatcher", "FilePattern", DynamicStringContract.DefaultFilePattern,
             "Translated dynamic string files to load from ResourcePath (* matches anything, case is ignored). Every match is loaded, alphabetically").Value;
 
+        StringPatcherServiceWrapper.ClosedGenericFallback = ReplacerConfig.File.Bind("DynamicStringPatcher", "ClosedGenericFallback", false,
+            "When a generic method can't be patched, patch it closed over its class constraint or object instead (covers reference-type instantiations). Experimental").Value;
+
         StringPatcherService = new StringPatcherServiceWrapper(new BepInEx5Logger(base.Logger),
             _enabled,
             new Harmony($"{MyPluginInfo.PLUGIN_GUID}.DynamicStringPatcher"),

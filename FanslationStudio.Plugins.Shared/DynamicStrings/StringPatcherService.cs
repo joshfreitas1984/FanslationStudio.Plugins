@@ -224,6 +224,14 @@ public class StringPatcherService
 
         foreach (var pending in pendingPatches)
         {
+            // HarmonyX can't patch a method of an open generic type and logs its own error for the attempt, so close it first.
+            if (ClosedGenericFallback && pending.Method.DeclaringType.IsGenericTypeDefinition
+                && TryPatchClosedGeneric(pending, new NotSupportedException("method of an open generic type")))
+            {
+                successCount += pending.GroupCount;
+                continue;
+            }
+
             try
             {
                 // Apply the patch
@@ -235,6 +243,12 @@ public class StringPatcherService
             }
             catch (Exception ex)
             {
+                if (ClosedGenericFallback && TryPatchClosedGeneric(pending, ex))
+                {
+                    successCount += pending.GroupCount;
+                    continue;
+                }
+
                 errorCount += pending.GroupCount;
                 badContractErrors.Add($"Error patching {pending.Type} {pending.Name}\n{ex}");
             }
@@ -246,6 +260,78 @@ public class StringPatcherService
         foreach (var error in badContractErrors)
             Logger.LogError(error);
     }
+
+    /// <summary>
+    /// When an open generic method (or a method of an open generic type) can't be patched, patch it closed over
+    /// <see cref="object"/> (or the parameter's class constraint) instead. The runtime shares one body between
+    /// every reference-type instantiation, so this covers them all; a value-type instantiation is not covered.
+    /// Off by default: detouring shared generic code is not safe on every runtime, so a game opts in through its config.
+    /// </summary>
+    public static bool ClosedGenericFallback { get; set; }
+
+    private bool TryPatchClosedGeneric(PendingPatch pending, Exception openError)
+    {
+        if (!pending.Method.ContainsGenericParameters)
+            return false;
+
+        try
+        {
+            var closed = CloseGenerics(pending.Method);
+            if (closed == null)
+            {
+                Logger.LogWarning($"Not patching {pending.Type}.{pending.Name}: a generic parameter is a value type, so there is no shared body to patch.");
+                return false;
+            }
+
+            _harmony.Patch(closed, transpiler: StringTranspiler.CreateTranspilerMethod(closed, pending.Contracts));
+            Logger.LogMessage($"Patched {pending.Type}.{pending.Name} closed over {string.Join(", ", GenericArgumentsOf(closed).Select(t => t.Name))}"
+                + $" (the open generic failed: {openError.GetBaseException().Message})");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning($"Closed generic fallback failed for {pending.Type}.{pending.Name}: {ex.GetBaseException().Message}");
+            return false;
+        }
+    }
+
+    private static MethodBase CloseGenerics(MethodBase open)
+    {
+        var type = open.DeclaringType;
+        if (type.IsGenericTypeDefinition)
+        {
+            var typeArguments = type.GetGenericArguments().Select(ClosingType).ToArray();
+            if (typeArguments.Any(t => t == null))
+                return null;
+
+            type = type.MakeGenericType(typeArguments);
+        }
+
+        var method = MethodBase.GetMethodFromHandle(open.MethodHandle, type.TypeHandle);
+        if (method is MethodInfo { IsGenericMethodDefinition: true } methodInfo)
+        {
+            var methodArguments = methodInfo.GetGenericArguments().Select(ClosingType).ToArray();
+            if (methodArguments.Any(t => t == null))
+                return null;
+
+            method = methodInfo.MakeGenericMethod(methodArguments);
+        }
+
+        return method;
+    }
+
+    // The class constraint if there is one, else object. Null for a struct constraint, which has no shared body.
+    private static Type ClosingType(Type genericParameter)
+    {
+        if ((genericParameter.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0)
+            return null;
+
+        return genericParameter.GetGenericParameterConstraints().FirstOrDefault(c => !c.IsInterface) ?? typeof(object);
+    }
+
+    private static IEnumerable<Type> GenericArgumentsOf(MethodBase method) =>
+        (method.DeclaringType.IsGenericType ? method.DeclaringType.GetGenericArguments() : [])
+            .Concat(method.IsGenericMethod ? method.GetGenericArguments() : []);
 
     private Type GetTargetType(GroupedDynamicStringContracts typeContract)
     {
@@ -317,6 +403,10 @@ public class StringPatcherService
         // Match simple name
         if (originalParamType == methodParamType.Name)
             return true;
+
+        // ref/out parameter: the dump appends '&' to the element type's name, which reflection reports on the element type.
+        if (methodParamType.IsByRef && originalParamType.EndsWith("&"))
+            return IsParameterMatch(originalParamType.Substring(0, originalParamType.Length - 1), methodParamType.GetElementType());
 
         // Handle generic types
         if (methodParamType.IsGenericType)
