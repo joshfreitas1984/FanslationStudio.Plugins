@@ -236,7 +236,7 @@ public class StringPatcherService
             {
                 // Apply the patch
                 //_harmony.Patch(targetMethod, transpiler: StringPatcherTranspiler.CreateTranspilerMethod(contract.Contracts, targetMethod));
-                _harmony.Patch(pending.Method, transpiler: StringTranspiler.CreateTranspilerMethod(pending.Method, pending.Contracts));
+                StringTranspiler.Patch(_harmony, pending.Method, pending.Contracts);
 
                 successCount += pending.GroupCount;
                 Logger.LogDebug($"Successfully patched: {pending.Type}.{pending.Name}");
@@ -283,7 +283,7 @@ public class StringPatcherService
                 return false;
             }
 
-            _harmony.Patch(closed, transpiler: StringTranspiler.CreateTranspilerMethod(closed, pending.Contracts));
+            StringTranspiler.Patch(_harmony, closed, pending.Contracts);
             Logger.LogMessage($"Patched {pending.Type}.{pending.Name} closed over {string.Join(", ", GenericArgumentsOf(closed).Select(t => t.Name))}"
                 + $" (the open generic failed: {openError.GetBaseException().Message})");
             return true;

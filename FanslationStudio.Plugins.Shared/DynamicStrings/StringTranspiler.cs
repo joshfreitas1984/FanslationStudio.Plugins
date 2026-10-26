@@ -1,4 +1,5 @@
 ﻿using HarmonyLib;
+using MonoMod.Cil;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -116,6 +117,44 @@ public class StringTranspiler
         //    DynamicStringPatcherPlugin.Logger.LogFatal($"New Instruction: {code.opcode} {code.operand}");
 
         return codes;
+    }
+
+    /// <summary>
+    /// Replaces the string constants with an ILManipulator, which edits the method's IL in place. The transpiler above round-trips the method through
+    /// CodeInstructions, and that round trip breaks methods shaped <c>try { ...; return x; } catch { ... } return default;</c>: the explicit
+    /// <c>leave</c> that ends the try block (aimed at the real return, not at the code after the catch) is lost, so the success path falls through to
+    /// the default return and the method returns default(T) without throwing. Seen on NpcActionUtil.GetPointByConfStr in Path of Kung Fu
+    /// (every NPC action destination became (0,0)). Harmony passes the original method to any MethodBase parameter.
+    /// </summary>
+    public static void ReplaceWithManipulator(ILContext context, MethodBase __originalMethod)
+    {
+        var translations = FindTranslations(__originalMethod);
+        if (translations == null)
+            return;
+
+        foreach (var instruction in context.Instrs)
+        {
+            if (instruction.OpCode == Mono.Cecil.Cil.OpCodes.Ldstr
+                && instruction.Operand is string operandStr
+                && translations.RawToTranslated.TryGetValue(operandStr, out var translatedStr))
+            {
+                instruction.Operand = translatedStr;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Registers the contracts for <paramref name="original"/> and patches it. Methods that need the map fix keep the transpiler (it edits
+    /// locals by index); every other method uses the ILManipulator so its exception blocks and branches are left exactly as compiled.
+    /// </summary>
+    public static void Patch(Harmony harmony, MethodBase original, IList<DynamicStringContract> contractsToApply)
+    {
+        TranslationsByMethod[original] = new MethodTranslations(contractsToApply);
+
+        if (TranslationsByMethod[original].IsMapFix)
+            harmony.Patch(original, transpiler: new HarmonyMethod(typeof(StringTranspiler).GetMethod(nameof(ReplaceWithTranspiler), BindingFlags.Public | BindingFlags.Static)));
+        else
+            harmony.Patch(original, ilmanipulator: new HarmonyMethod(typeof(StringTranspiler).GetMethod(nameof(ReplaceWithManipulator), BindingFlags.Public | BindingFlags.Static)));
     }
 
     // Every caller replaces rawInstruction with newInstruction, so moving is equivalent to copying.
